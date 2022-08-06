@@ -1,20 +1,20 @@
 use std::{
     env,
-    fmt::{self},
     fs::File,
     io::{self, stdout, BufRead, BufReader, Write},
     process,
 };
 
 mod ast;
+mod interpreter;
+mod lox_error;
 mod parser;
 mod scanner;
-mod interpreter;
 
 use parser::parser::Parser;
 use stringreader::StringReader;
 
-use crate::{ast::*, scanner::scanner::Scanner, interpreter::interpreter::Interpreter};
+use crate::{ast::*, interpreter::interpreter::Interpreter, scanner::scanner::Scanner};
 
 pub struct Lox {}
 
@@ -30,10 +30,7 @@ impl Lox {
         for line in stdin.lock().lines() {
             match line {
                 Ok(line) if !line.is_empty() => {
-                    match self.run(Box::new(StringReader::new(&line))) {
-                        Ok(_) => {}
-                        Err(error) => println!("{}", error),
-                    }
+                    self.run(Box::new(StringReader::new(&line)));
                     print!("> ");
                     stdout().flush().expect("Could not flush stdout");
                 }
@@ -45,9 +42,8 @@ impl Lox {
     pub fn run_file(&self, path: &str) -> io::Result<()> {
         let f = File::open(path)?;
         let reader = BufReader::new(f);
-        match self.run(Box::new(reader)) {
-            Ok(_) => {}
-            Err(error) => println!("{}", error),
+        if self.run(Box::new(reader)) {
+            std::process::exit(65);
         }
         Ok(())
     }
@@ -56,26 +52,36 @@ impl Lox {
         print!("Usage: lox <src>");
         process::exit(64);
     }
-    fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> Result<(), LoxError> {
+    fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
+        let mut had_error = false;
         let mut parser = Parser::new(Scanner::new(reader));
         let printer = AstPrinter {};
+        let interpreter = Interpreter::new();
 
-        let expr = parser.expression()?;
-        println!("Interpreting expression {}", printer.print(&expr).unwrap());
+        loop {
+            match parser.declaration() {
+                Ok(stmt) => match stmt {
+                    Some(stmt) => {
+                        println!(
+                            "Interpreting statement {}",
+                            printer.print(&stmt).unwrap()
+                        );
 
-        let interpreter = Interpreter {};
+                        match interpreter.evaluate(&stmt) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                had_error = true;
+                                break;
+                            }
+                        }
+                    },
+                    None => break
+                },
+                Err(_) => had_error = true,
+            };
+        }
 
-        println!("{}", interpreter.evaluate(&expr)?);
-
-        // loop {
-        //     let token = scanner.next()?;
-        //     match token {
-        //         Some(token) => println!("{}", token),
-        //         None => break,
-        //     }
-        // }
-
-        Ok(())
+        had_error
     }
 }
 
@@ -86,23 +92,5 @@ pub fn main() {
         1 => lox.run_promt(),
         2 => lox.run_file(&args[1]).expect("Could not read file"),
         _ => lox.print_usage(),
-    }
-}
-
-#[derive(Debug)]
-pub struct LoxError {
-    line: usize,
-    message: String,
-}
-
-impl fmt::Display for LoxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[line {}] {}", self.line, self.message)
-    }
-}
-
-impl LoxError {
-    pub fn new(line: usize, message: String) -> Self {
-        Self { line, message }
     }
 }

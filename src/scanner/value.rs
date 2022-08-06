@@ -74,6 +74,16 @@ impl ops::Mul for Value {
         Value::Nil
     }
 }
+impl ops::Neg for Value {
+    type Output = Value;
+
+    fn neg(self) -> Self::Output {
+        if let Value::Number(l) = self {
+            return Value::Number(-l);
+        }
+        Value::Nil
+    }
+}
 impl cmp::PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         match (self, other) {

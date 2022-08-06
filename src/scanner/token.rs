@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{token_type::TokenType, value::Value};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Token {
     pub ttype: TokenType,
     pub lexeme: String,

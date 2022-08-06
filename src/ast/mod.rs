@@ -1,7 +1,7 @@
 use r_ast::define_ast;
 
+use crate::lox_error::LoxError;
 use crate::scanner::token::{Token};
-use crate::LoxError;
 use crate::scanner::value::Value;
 
 define_ast!(Expr(
@@ -9,12 +9,19 @@ define_ast!(Expr(
     Grouping: { expression: Expr },
     Literal: { value: Value },
     Unary: { operator: Token, right: Expr },
+    Var: { name: Token },
+));
+
+define_ast!(Stmt(
+    Expression: { expression: Expr },
+    Print: { expression: Expr },
+    Var: { name: Token, initializer: Expr }, 
 ));
 
 pub struct AstPrinter {}
 
 impl AstPrinter {
-    pub fn print(&self, expr: &Expr) -> Result<String, LoxError> {
+    pub fn print(&self, expr: &Stmt) -> Result<String, LoxError> {
         expr.accept(self)
     }
     fn parenthesize(&self, name: &String, exprs: &[&Box<Expr>]) -> Result<String, LoxError> {
@@ -49,5 +56,23 @@ impl ExprVisitor<String> for AstPrinter {
 
     fn visit_unary_expr(&self,expr: &UnaryExpr) -> Result<String,LoxError>  {
         self.parenthesize(&expr.operator.lexeme, &[&expr.right])
+    }
+
+    fn visit_var_expr(&self,expr: &VarExpr) -> Result<String,LoxError>  {
+        Ok(format!("{}", expr.name))
+    }
+}
+
+impl StmtVisitor<String> for AstPrinter {
+    fn visit_expression_stmt(&self,stmt: &ExpressionStmt) -> Result<String,LoxError>  {
+        stmt.expression.accept(self)
+    }
+
+    fn visit_print_stmt(&self,stmt: &PrintStmt) -> Result<String,LoxError>  {
+        self.parenthesize(&"print".to_string(), &[&stmt.expression])
+    }
+
+    fn visit_var_stmt(&self,stmt: &VarStmt) -> Result<String,LoxError>  {
+        self.parenthesize(&"var".to_string(), &[&stmt.initializer])
     }
 }

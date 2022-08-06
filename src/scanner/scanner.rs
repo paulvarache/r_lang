@@ -1,8 +1,16 @@
 use std::io::{self, BufRead, BufReader, Read};
 
-use crate::{scanner::value::Value, LoxError};
+use crate::{scanner::value::Value, lox_error::LoxError};
 
 use super::{token::Token, token_type::TokenType};
+
+impl LoxError {
+    pub fn scanner(line: usize, message: String) -> Self {
+        let err = LoxError::Scanner { line, message };
+        err.report();
+        err
+    }
+}
 
 pub struct Scanner<'a> {
     cursor: usize,
@@ -33,6 +41,9 @@ impl<'a> Scanner<'a> {
             buffer: Vec::new(),
             reader: BufReader::new(r),
         }
+    }
+    pub fn line(&mut self) -> usize {
+        self.line
     }
     pub fn next(&mut self) -> Result<Option<Token>, LoxError> {
         if self.reached_end {
@@ -104,7 +115,7 @@ impl<'a> Scanner<'a> {
                 b'"' => self.get_string(),
                 b'0'..=b'9' => self.get_number(),
                 _ if is_alpha(c) => self.get_identifier(),
-                _ => Err(LoxError::new(self.line, "Unexpected character".to_string())),
+                _ => Err(LoxError::scanner(self.line, "Unexpected character".to_string())),
             },
         }
     }
@@ -183,7 +194,7 @@ impl<'a> Scanner<'a> {
                     self.advance();
                 }
                 None => {
-                    return Err(LoxError::new(self.line, "Unterminated string".to_string()));
+                    return Err(LoxError::scanner(self.line, "Unterminated string".to_string()));
                 }
                 _ => {
                     self.advance(); // Eat the closing "
@@ -221,7 +232,7 @@ impl<'a> Scanner<'a> {
         }
         let s = self.consume();
         match s.clone().parse::<f64>() {
-            Err(_) => Err(LoxError::new(self.line, "Could not parse number".to_string())),
+            Err(_) => Err(LoxError::scanner(self.line, "Could not parse number".to_string())),
             Ok(literal) => Ok(Some(Token::new(TokenType::Number, s, self.line, Some(Value::Number(literal)))))
         }
     }
