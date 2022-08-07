@@ -5,9 +5,11 @@ use crate::scanner::token::Token;
 use crate::scanner::value::Value;
 
 define_ast!(Expr(
+    Assign: { name: Token, value: Expr },
     Binary: { left: Expr, operator: Token, right: Expr },
     Grouping: { expression: Expr },
     Literal: { value: Value },
+    Logical: { left: Expr, operator: Token, right: Expr },
     Unary: { operator: Token, right: Expr },
     Var: { name: Token },
 ));
@@ -15,8 +17,10 @@ define_ast!(Expr(
 define_ast!(Stmt(
     Block: { statements: Vec<Stmt> },
     Expression: { expression: Expr },
+    If: { predicate: Expr, then_branch: Stmt, else_branch: Option<Stmt> },
     Print: { expression: Expr },
     Var: { name: Token, initializer: Expr },
+    While: { predicate: Expr, body: Stmt },
 ));
 
 pub struct AstPrinter {}
@@ -38,9 +42,13 @@ impl AstPrinter {
 }
 
 impl ExprVisitor<String> for AstPrinter {
+    fn visit_assign_expr(&self,expr: &AssignExpr) -> Result<String,LoxError>  {
+        Ok(format!("(set {} {})", expr.name.as_string(), expr.value.accept(self)?))
+    }
     fn visit_binary_expr(&self, expr: &BinaryExpr) -> Result<String, LoxError> {
         self.parenthesize(&expr.operator.lexeme, &[&expr.left, &expr.right])
     }
+
     fn visit_grouping_expr(&self, expr: &GroupingExpr) -> Result<String, LoxError> {
         self.parenthesize(&"group".to_string(), &[&expr.expression])
     }
@@ -54,6 +62,10 @@ impl ExprVisitor<String> for AstPrinter {
         }
     }
 
+    fn visit_logical_expr(&self,expr: &LogicalExpr) -> Result<String,LoxError>  {
+        self.parenthesize(&expr.operator.lexeme, &[&expr.left, &expr.right])
+    }
+
     fn visit_unary_expr(&self, expr: &UnaryExpr) -> Result<String, LoxError> {
         self.parenthesize(&expr.operator.lexeme, &[&expr.right])
     }
@@ -64,8 +76,27 @@ impl ExprVisitor<String> for AstPrinter {
 }
 
 impl StmtVisitor<String> for AstPrinter {
+    fn visit_block_stmt(&self, stmt: &BlockStmt) -> Result<String, LoxError> {
+        stmt.statements
+            .iter()
+            .try_fold(String::new(), |acc, stmt| Ok(acc + &stmt.accept(self)?))
+    }
+
     fn visit_expression_stmt(&self, stmt: &ExpressionStmt) -> Result<String, LoxError> {
         stmt.expression.accept(self)
+    }
+
+    fn visit_if_stmt(&self, stmt: &IfStmt) -> Result<String, LoxError> {
+        let predicate = stmt.predicate.accept(self)?;
+        let then = stmt.then_branch.accept(self)?;
+        let mut str = format!("(if ({}) then {}", predicate, then);
+        if let Some(else_branch) = &stmt.else_branch {
+            str = format!("{} else {}", str, else_branch.accept(self)?);
+        }
+
+        str = format!("{})", str);
+
+        Ok(str)
     }
 
     fn visit_print_stmt(&self, stmt: &PrintStmt) -> Result<String, LoxError> {
@@ -76,9 +107,7 @@ impl StmtVisitor<String> for AstPrinter {
         self.parenthesize(&"var".to_string(), &[&stmt.initializer])
     }
 
-    fn visit_block_stmt(&self, stmt: &BlockStmt) -> Result<String, LoxError> {
-        stmt.statements
-            .iter()
-            .try_fold(String::new(), |acc, stmt| Ok(acc + &stmt.accept(self)?))
+    fn visit_while_stmt(&self,stmt: &WhileStmt) -> Result<String,LoxError>  {
+        Ok(format!("(while {} {})", stmt.predicate.accept(self)?, stmt.body.accept(self)?))
     }
 }

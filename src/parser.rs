@@ -1,7 +1,7 @@
 use crate::{
     ast::*,
-    lox_error::LoxError,
-    scanner::{Scan, token::Token, token_type::TokenType, value::Value},
+    lox_error::{LoxError, LoxResult},
+    scanner::{token::Token, token_type::TokenType, value::Value, Scan},
 };
 
 impl LoxError {
@@ -44,45 +44,43 @@ impl<'a> Parser<'a> {
 
     // var_delaration -> IDENTIFIER ( "=" expression )? ";"
     fn var_declaration(&mut self) -> Result<Option<Stmt>, LoxError> {
-        match self.is_match(&[TokenType::Identifier])? {
-            Some(name) => {
-                let mut initializer = Expr::Literal(LiteralExpr { value: Value::Nil });
+        let name = self
+            .is_match(&[TokenType::Identifier])?
+            .ok_or_else(|| LoxError::scanner(1, "expected identifer after var".to_string()))?;
+        let mut initializer = Expr::Literal(LiteralExpr { value: Value::Nil });
 
-                match self.is_match(&[TokenType::Equal])? {
-                    Some(_) => match self.expression()? {
-                        Some(init) => initializer = init,
-                        None => {
-                            return Err(LoxError::scanner(
-                                1,
-                                "expected expression after =".to_string(),
-                            ))
-                        }
-                    },
-                    None => {}
-                };
-                self.expect_semi_colon("expected ; after var declaration".to_string())?;
-
-                Ok(Some(Stmt::Var(VarStmt {
-                    name,
-                    initializer: Box::new(initializer),
-                })))
-            }
-            None => Err(LoxError::scanner(
-                1,
-                "expected identifer after var".to_string(),
-            )),
+        if let Some(token) = self.is_match(&[TokenType::Equal])? {
+            initializer = self.expression()?.ok_or_else(|| {
+                LoxError::parser(token, "expected expression after =".to_string())
+            })?;
         }
+
+        self.expect_semi_colon("expected ; after var declaration".to_string())?;
+
+        Ok(Some(Stmt::Var(VarStmt {
+            name,
+            initializer: Box::new(initializer),
+        })))
     }
 
     // statement -> exprStmt
+    //            | ifStmt
     //            | printStmt
     //            | block
     pub fn statement(&mut self) -> Result<Option<Stmt>, LoxError> {
         match self.peek()? {
             Some(token) => match token.ttype {
+                TokenType::If => {
+                    self.skip()?;
+                    self.if_statement()
+                }
                 TokenType::Print => {
                     self.skip()?;
                     self.print_statement()
+                }
+                TokenType::While => {
+                    self.skip()?;
+                    self.while_statement()
                 }
                 TokenType::OpenBrace => {
                     self.skip()?;
@@ -95,7 +93,7 @@ impl<'a> Parser<'a> {
     }
 
     // printStmt -> "print" expression
-    fn print_statement(&mut self) -> Result<Option<Stmt>, LoxError> {
+    fn print_statement(&mut self) -> LoxResult<Option<Stmt>> {
         match self.expression()? {
             Some(expr) => self
                 .expect_semi_colon("expected ; after value".to_string())
@@ -104,6 +102,63 @@ impl<'a> Parser<'a> {
                 })))),
             None => Ok(None),
         }
+    }
+    fn if_statement(&mut self) -> LoxResult<Option<Stmt>> {
+        let token = self.is_match(&[TokenType::OpenParen])?.ok_or_else(|| {
+            LoxError::scanner(self.scanner.line(), "expected ( after if".to_string())
+        })?;
+
+        let predicate = self.expression()?.ok_or_else(|| {
+            LoxError::parser(
+                token.clone(),
+                "expected expression in if parens".to_string(),
+            )
+        })?;
+        let token = self.is_match(&[TokenType::CloseParen])?.ok_or_else(|| {
+            LoxError::parser(token.clone(), "expected ) after if predicate".to_string())
+        })?;
+        let then_branch = self.statement()?.ok_or_else(|| {
+            LoxError::parser(
+                token.clone(),
+                "expected statement after if predicate".to_string(),
+            )
+        })?;
+        let mut else_branch = None;
+        if let Some(token) = self.is_match(&[TokenType::Else])? {
+            else_branch = Some(self.statement()?.ok_or_else(|| {
+                LoxError::parser(token, "expected statement in else".to_string())
+            })?);
+        }
+        Ok(Some(Stmt::If(IfStmt {
+            predicate: Box::new(predicate),
+            then_branch: Box::new(then_branch),
+            else_branch: else_branch.map(Box::new),
+        })))
+    }
+    fn while_statement(&mut self) -> LoxResult<Option<Stmt>> {
+        let token = self.is_match(&[TokenType::OpenParen])?.ok_or_else(|| {
+            LoxError::scanner(self.scanner.line(), "expected ( after while".to_string())
+        })?;
+
+        let predicate = self.expression()?.ok_or_else(|| {
+            LoxError::parser(
+                token.clone(),
+                "expected expression in while parens".to_string(),
+            )
+        })?;
+        let token = self.is_match(&[TokenType::CloseParen])?.ok_or_else(|| {
+            LoxError::parser(token.clone(), "expected ) after while predicate".to_string())
+        })?;
+        let body = self.statement()?.ok_or_else(|| {
+            LoxError::parser(
+                token.clone(),
+                "expected statement after if predicate".to_string(),
+            )
+        })?;
+        Ok(Some(Stmt::While(WhileStmt {
+            predicate: Box::new(predicate),
+            body: Box::new(body),
+        })))
     }
     // exprStmt -> expression ';'
     fn expression_statement(&mut self) -> Result<Option<Stmt>, LoxError> {
@@ -142,9 +197,70 @@ impl<'a> Parser<'a> {
         Ok(Some(Stmt::Block(BlockStmt { statements })))
     }
 
+    // assignment -> IDENTIFIER "=" assignment
+    //             | logic_or
+    fn assignment(&mut self) -> LoxResult<Option<Expr>> {
+        if let Some(expr) = self.logic_or()? {
+            if let Some(token) = self.is_match(&[TokenType::Equal])? {
+                let value = self
+                    .assignment()?
+                    .ok_or_else(|| LoxError::parser(token, "expected assignment".to_string()))?;
+                if let Expr::Var(v) = expr {
+                    return Ok(Some(Expr::Assign(AssignExpr {
+                        name: v.name,
+                        value: Box::new(value),
+                    })));
+                }
+                return Err(LoxError::scanner(
+                    self.scanner.line(),
+                    "invalid assignment target".to_string(),
+                ));
+            }
+            return Ok(Some(expr));
+        }
+        // forward the none
+        Ok(None)
+    }
+    // logic_or -> logic_and ( "or" logic_and )*
+    fn logic_or(&mut self) -> LoxResult<Option<Expr>> {
+        if let Some(mut expr) = self.logic_and()? {
+            while let Some(operator) = self.is_match(&[TokenType::Or])? {
+                if let Some(right) = self.logic_and()? {
+                    expr = Expr::Logical(LogicalExpr {
+                        left: Box::new(expr),
+                        operator,
+                        right: Box::new(right)
+                    });
+                } else {
+                    return Err(LoxError::parser(operator, "Expected expression after 'or'".to_string()))
+                }
+            }
+            return Ok(Some(expr));
+        }
+        Ok(None)
+    }
+    // logic_or -> equality ( "and" equality )* ;
+    fn logic_and(&mut self) -> LoxResult<Option<Expr>> {
+        if let Some(mut expr) = self.equality()? {
+            while let Some(operator) = self.is_match(&[TokenType::And])? {
+                if let Some(right) = self.equality()? {
+                    expr = Expr::Logical(LogicalExpr {
+                        left: Box::new(expr),
+                        operator,
+                        right: Box::new(right)
+                    });
+                } else {
+                    return Err(LoxError::parser(operator, "Expected expression after 'and'".to_string()))
+                }
+            }
+            return Ok(Some(expr));
+        }
+        Ok(None)
+    }
+
     // expression -> equality
-    pub fn expression(&mut self) -> Result<Option<Expr>, LoxError> {
-        self.equality()
+    pub fn expression(&mut self) -> LoxResult<Option<Expr>> {
+        self.assignment()
     }
 
     // equality -> comparison ( ('==' | '!=') comparison )*
@@ -312,7 +428,9 @@ impl<'a> Parser<'a> {
                                     expression: Box::new(expr),
                                 })))
                             }
-                            Some(c) => Err(LoxError::parser(c, "expected closing paren".to_string())),
+                            Some(c) => {
+                                Err(LoxError::parser(c, "expected closing paren".to_string()))
+                            }
                             _ => Err(LoxError::parser(
                                 token,
                                 "expected closing paren got Eof".to_string(),
@@ -422,7 +540,7 @@ mod tests {
     use crate::{
         ast::{Expr, LiteralExpr, Stmt, VarExpr},
         lox_error::LoxResult,
-        scanner::{Scan, token::Token, token_type::TokenType, value::Value},
+        scanner::{token::Token, token_type::TokenType, value::Value, Scan},
     };
 
     use super::Parser;
@@ -611,9 +729,7 @@ mod tests {
 
     #[test]
     fn primary_eof() {
-        let result = test_parse_expr(vec![
-            token(TokenType::Eof),
-        ]);
+        let result = test_parse_expr(vec![token(TokenType::Eof)]);
 
         assert!(result.is_ok());
         let expr = result.expect("Unexpected fail");
@@ -622,9 +738,7 @@ mod tests {
 
     #[test]
     fn expext_semi_colon_success() {
-        let s = TestScanner::new(vec![
-            token(TokenType::Semicolon),
-        ]);
+        let s = TestScanner::new(vec![token(TokenType::Semicolon)]);
         let mut parser = Parser::new(Box::new(s));
 
         let res = parser.expect_semi_colon(format!(""));
@@ -633,9 +747,7 @@ mod tests {
 
     #[test]
     fn expext_semi_colon_failure() {
-        let s = TestScanner::new(vec![
-            token(TokenType::Minus),
-        ]);
+        let s = TestScanner::new(vec![token(TokenType::Minus)]);
         let mut parser = Parser::new(Box::new(s));
 
         let res = parser.expect_semi_colon(format!(""));
@@ -652,4 +764,92 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn if_missing_open_paren() {
+        let result = test_parse_stmt(vec![token(TokenType::If), token(TokenType::Print)]);
+
+        assert!(result.is_err());
+    }
+    #[test]
+    fn if_missing_predicate() {
+        let result = test_parse_stmt(vec![
+            token(TokenType::If),
+            token(TokenType::OpenParen),
+            token(TokenType::Print),
+        ]);
+
+        assert!(result.is_err());
+    }
+    #[test]
+    fn if_missing_closing_paren() {
+        let result = test_parse_stmt(vec![
+            token(TokenType::If),
+            token(TokenType::OpenParen),
+            token(TokenType::True),
+            token(TokenType::Semicolon),
+        ]);
+
+        assert!(result.is_err());
+    }
+    #[test]
+    fn if_inline() {
+        let result = test_parse_stmt(vec![
+            token(TokenType::If),
+            token(TokenType::OpenParen),
+            token(TokenType::True),
+            token(TokenType::CloseParen),
+            token(TokenType::True),
+            token(TokenType::Semicolon),
+        ]);
+
+        assert!(result.is_ok());
+    }
+    #[test]
+    fn if_missing_else_stmt_after_else() {
+        let result = test_parse_stmt(vec![
+            token(TokenType::If),
+            token(TokenType::OpenParen),
+            token(TokenType::True),
+            token(TokenType::CloseParen),
+            token(TokenType::True),
+            token(TokenType::Semicolon),
+            token(TokenType::Else),
+            token(TokenType::Semicolon),
+        ]);
+
+        assert!(result.is_err());
+    }
+    #[test]
+    fn if_else() {
+        let result = test_parse_stmt(vec![
+            token(TokenType::If),
+            token(TokenType::OpenParen),
+            token(TokenType::True),
+            token(TokenType::CloseParen),
+            token(TokenType::True),
+            token(TokenType::Semicolon),
+            token(TokenType::Else),
+            token(TokenType::True),
+            token(TokenType::Semicolon),
+        ]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn logic() {
+        let result = test_parse_expr(vec![
+            token(TokenType::True),
+            token(TokenType::And),
+            token(TokenType::False),
+            token(TokenType::Or),
+            token(TokenType::False),
+            token(TokenType::And),
+            token(TokenType::Nil),
+        ]);
+
+        assert!(result.is_ok());
+    }
+
 }

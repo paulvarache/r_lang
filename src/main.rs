@@ -66,16 +66,16 @@ impl Lox {
     fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
         let mut had_error = false;
         let mut parser = Parser::new(Box::new(Scanner::new(reader)));
-        let printer = AstPrinter {};
+        // let printer = AstPrinter {};
 
         loop {
             match parser.declaration() {
                 Ok(stmt) => match stmt {
                     Some(stmt) => {
-                        println!(
-                            "Parsed statement {}",
-                            printer.print(&stmt).unwrap()
-                        );
+                        // println!(
+                        //     "Parsed statement {}",
+                        //     printer.print(&stmt).unwrap()
+                        // );
                         // Don't evaluate the next statement it it failed before
                         if had_error {
                             continue;

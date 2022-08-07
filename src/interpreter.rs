@@ -1,8 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
+use crate::ast::*;
 use crate::environment::*;
 use crate::lox_error::*;
-use crate::ast::*;
 use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
@@ -66,13 +66,37 @@ impl Interpreter {
 }
 
 impl StmtVisitor<()> for Interpreter {
+    fn visit_block_stmt(&self, stmt: &crate::ast::BlockStmt) -> Result<(), LoxError> {
+        let e = Environment::new_with_enclosing(self.environment.borrow().clone());
+        self.execute_block(&stmt.statements, e)
+    }
+
     fn visit_expression_stmt(&self, stmt: &ExpressionStmt) -> Result<(), LoxError> {
         self.evaluate(&stmt.expression).and(Ok(()))
     }
 
+    fn visit_if_stmt(&self, stmt: &IfStmt) -> Result<(), LoxError> {
+        let pred = Interpreter::is_thruthy(stmt.predicate.accept(self)?);
+        match pred {
+            true => self.execute(&stmt.then_branch),
+            false => {
+                if let Some(else_branch) = &stmt.else_branch {
+                    return self.execute(else_branch);
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn visit_print_stmt(&self, stmt: &PrintStmt) -> Result<(), LoxError> {
         let value = self.evaluate(&stmt.expression)?;
-        println!("{}", value);
+        let formatted = match value {
+            Value::Nil => "nil".to_string(),
+            Value::Bool(b) => format!("{}", b),
+            Value::String(s) => format!("\"{}\"", s),
+            Value::Number(n) => format!("{}", n),
+        };
+        println!("{}", formatted);
         Ok(())
     }
 
@@ -85,13 +109,24 @@ impl StmtVisitor<()> for Interpreter {
         Ok(())
     }
 
-    fn visit_block_stmt(&self, stmt: &crate::ast::BlockStmt) -> Result<(), LoxError> {
-        let e = Environment::new_with_enclosing(self.environment.borrow().clone());
-        self.execute_block(&stmt.statements, e)
+    fn visit_while_stmt(&self, stmt: &WhileStmt) -> Result<(), LoxError> {
+        while Interpreter::is_thruthy(self.evaluate(&stmt.predicate)?) {
+            self.execute(&stmt.body)?;
+        }
+        Ok(())
     }
 }
 
 impl ExprVisitor<Value> for Interpreter {
+    fn visit_assign_expr(&self, expr: &AssignExpr) -> Result<Value, LoxError> {
+        let value = self.evaluate(&expr.value)?;
+        self.environment
+            .borrow()
+            .borrow_mut()
+            .assign(&expr.name, value)?;
+        self.environment.borrow().borrow().get(&expr.name)
+    }
+
     fn visit_binary_expr(&self, expr: &BinaryExpr) -> Result<Value, LoxError> {
         let left = self.evaluate(&expr.left)?;
         let right = self.evaluate(&expr.right)?;
@@ -143,6 +178,22 @@ impl ExprVisitor<Value> for Interpreter {
         Ok(expr.value.clone())
     }
 
+    fn visit_logical_expr(&self, expr: &LogicalExpr) -> Result<Value, LoxError> {
+        let left = self.evaluate(&expr.left)?;
+
+        match (&expr.operator.ttype, Interpreter::is_thruthy(left.clone())) {
+            (TokenType::And, true) | (TokenType::Or, false) => {
+                let right = self.evaluate(&expr.right)?;
+                Ok(right)
+            }
+            (TokenType::And, false) | (TokenType::Or, true) => Ok(left),
+            _ => Err(LoxError::interpreter(
+                &expr.operator,
+                "expected AND or OR".to_string(),
+            )),
+        }
+    }
+
     fn visit_unary_expr(&self, expr: &UnaryExpr) -> Result<Value, LoxError> {
         let right = self.evaluate(&expr.right)?;
         match expr.operator.ttype {
@@ -175,14 +226,35 @@ mod tests {
 
     use super::*;
 
+    fn number(n: f64) -> Value {
+        Value::Number(n)
+    }
+    fn string(s: &str) -> Value {
+        Value::String(s.to_string())
+    }
+    fn bool(b: bool) -> Value {
+        Value::Bool(b)
+    }
+
+    fn token(ttype: TokenType) -> Token {
+        Token::new(ttype, "".to_string(), 0, None)
+    }
+
+    fn token_literal(ttype: TokenType, literal: Value) -> Token {
+        Token::new(ttype, "".to_string(), 0, Some(literal))
+    }
+
+    fn literal(value: Value) -> Expr {
+        Expr::Literal(LiteralExpr { value })
+    }
+
     #[test]
     fn test_unary_minus() {
         let terp = Interpreter::new();
+
         let unary_expr = UnaryExpr {
-            operator: Token::new(TokenType::Minus, "-".to_string(), 0, None),
-            right: Box::new(Expr::Literal(LiteralExpr {
-                value: Value::Number(2.0),
-            })),
+            operator: token(TokenType::Minus),
+            right: Box::new(literal(number(2.0))),
         };
         let result = terp.visit_unary_expr(&unary_expr);
         assert!(result.is_ok());
@@ -192,13 +264,286 @@ mod tests {
     fn test_unary_not() {
         let terp = Interpreter::new();
         let unary_expr = UnaryExpr {
-            operator: Token::new(TokenType::Bang, "-".to_string(), 0, None),
-            right: Box::new(Expr::Literal(LiteralExpr {
-                value: Value::Bool(false),
-            })),
+            operator: token(TokenType::Bang),
+            right: Box::new(literal(bool(false))),
         };
         let result = terp.visit_unary_expr(&unary_expr);
         assert!(result.is_ok());
         assert_eq!(result.ok(), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn if_then() {
+        let terp = Interpreter::new();
+        let var_stmt = VarStmt {
+            name: token_literal(TokenType::Identifier, string("hi")),
+            initializer: Box::new(literal(string("hi"))),
+        };
+        let expr = AssignExpr {
+            name: token_literal(TokenType::Identifier, string("hi")),
+            value: Box::new(literal(string("hello"))),
+        };
+        let stmt = IfStmt {
+            predicate: Box::new(literal(string("smth"))),
+            then_branch: Box::new(Stmt::Expression(ExpressionStmt {
+                expression: Box::new(Expr::Assign(expr)),
+            })),
+            else_branch: None,
+        };
+        terp.visit_var_stmt(&var_stmt).expect("Failed to set var");
+        let result = terp.visit_if_stmt(&stmt);
+        assert!(result.is_ok());
+        // Read variable
+        let result = terp
+            .environment
+            .borrow()
+            .borrow()
+            .get(&token_literal(TokenType::Identifier, string("hi")));
+        assert_eq!(result.expect("hi"), Value::String("hello".to_string()))
+    }
+
+    #[test]
+    fn assign() {
+        let terp = Interpreter::new();
+        let stmt = VarStmt {
+            name: token_literal(TokenType::Identifier, string("hi")),
+            initializer: Box::new(literal(string("hi"))),
+        };
+        let expr = AssignExpr {
+            name: token_literal(TokenType::Identifier, string("hi")),
+            value: Box::new(literal(string("hello"))),
+        };
+        let result = terp.visit_var_stmt(&stmt);
+        assert!(result.is_ok());
+        let result = terp.visit_assign_expr(&expr);
+        assert!(result.is_ok());
+        assert_eq!(result.expect("hi"), Value::String("hello".to_string()))
+    }
+
+    fn set_var(name: &str, init: Value, value: Value) -> (Stmt, Expr) {
+        let stmt = Stmt::Var(VarStmt {
+            name: token_literal(TokenType::Identifier, string("hi")),
+            initializer: Box::new(literal(init)),
+        });
+        let expr = Expr::Assign(AssignExpr {
+            name: token_literal(TokenType::Identifier, string(name)),
+            value: Box::new(literal(value)),
+        });
+
+        (stmt, expr)
+    }
+
+    fn read_var(inter: Interpreter, name: &str) -> Value {
+        inter
+            .environment
+            .borrow()
+            .borrow()
+            .get(&token_literal(TokenType::Identifier, string(name)))
+            .expect("Could not read checker value")
+    }
+
+    #[test]
+    fn logical_and_true() {
+        let terp = Interpreter::new();
+        let (stmt, expr) = set_var("executed", bool(false), bool(true));
+
+        terp.execute(&stmt)
+            .expect("Could not initialize checker var");
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(true))),
+            operator: token(TokenType::And),
+            right: Box::new(expr),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::Bool(true)));
+
+        // Should have evaluated the right arm of the AND operator
+        let val = read_var(terp, "executed");
+
+        assert!(matches!(val, Value::Bool(true)));
+    }
+    #[test]
+    fn logical_and_false() {
+        let terp = Interpreter::new();
+        let (stmt, expr) = set_var("executed", bool(false), bool(true));
+
+        terp.execute(&stmt)
+            .expect("Could not initialize checker var");
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(false))),
+            operator: token(TokenType::And),
+            right: Box::new(expr),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::Bool(false)));
+
+        // Should have NOT evaluated the right arm of the AND operator
+        let val = read_var(terp, "executed");
+
+        assert!(matches!(val, Value::Bool(false)));
+    }
+    #[test]
+    fn logical_or_true() {
+        let terp = Interpreter::new();
+        let (stmt, expr) = set_var("executed", bool(false), bool(true));
+
+        terp.execute(&stmt)
+            .expect("Could not initialize checker var");
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(true))),
+            operator: token(TokenType::Or),
+            right: Box::new(expr),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::Bool(true)));
+
+        // Should have NOT evaluated the right arm of the OR operator
+        let val = read_var(terp, "executed");
+
+        assert!(matches!(val, Value::Bool(false)));
+    }
+    #[test]
+    fn logical_or_false() {
+        let terp = Interpreter::new();
+        let (stmt, expr) = set_var("executed", bool(false), bool(true));
+
+        terp.execute(&stmt)
+            .expect("Could not initialize checker var");
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(false))),
+            operator: token(TokenType::Or),
+            right: Box::new(expr),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        // true is the result of the right arm of the OR
+        assert!(matches!(result.expect(""), Value::Bool(true)));
+
+        // Should have evaluated the right arm of the AND operator
+        let val = read_var(terp, "executed");
+
+        assert!(matches!(val, Value::Bool(true)));
+    }
+
+    #[test]
+    fn logical_and_left_type() {
+        let terp = Interpreter::new();
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(Value::Nil)),
+            operator: token(TokenType::And),
+            right: Box::new(literal(string("hi"))),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::Nil));
+    }
+    #[test]
+    fn logical_and_right_type() {
+        let terp = Interpreter::new();
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(true))),
+            operator: token(TokenType::And),
+            right: Box::new(literal(string("hi"))),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::String(s) if s == "hi"));
+    }
+    #[test]
+    fn logical_or_left_type() {
+        let terp = Interpreter::new();
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(string("hi"))),
+            operator: token(TokenType::Or),
+            right: Box::new(literal(bool(false))),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::String(s) if s == "hi"));
+    }
+    #[test]
+    fn logical_or_right_type() {
+        let terp = Interpreter::new();
+
+        let ex = Expr::Logical(LogicalExpr {
+            left: Box::new(literal(bool(false))),
+            operator: token(TokenType::Or),
+            right: Box::new(literal(string("hi"))),
+        });
+
+        let result = terp.evaluate(&ex);
+
+        assert!(result.is_ok());
+        assert!(matches!(result.expect(""), Value::String(s) if s == "hi"));
+    }
+
+    #[test]
+    fn while_loop() {
+        let terp = Interpreter::new();
+
+        let var_name = token_literal(TokenType::Identifier, string("count"));
+
+        let init_var = Stmt::Var(VarStmt {
+            name: var_name.clone(),
+            initializer: Box::new(literal(number(0.0))),
+        });
+
+        let stmt = Stmt::While(WhileStmt {
+            // count < 5
+            predicate: Box::new(Expr::Binary(BinaryExpr {
+                left: Box::new(Expr::Var(VarExpr {
+                    name: var_name.clone(),
+                })),
+                operator: token(TokenType::Less),
+                right: Box::new(literal(number(5.0))),
+            })),
+            body: Box::new(Stmt::Expression(ExpressionStmt {
+                // count = count + 1
+                expression: Box::new(Expr::Assign(AssignExpr {
+                    name: var_name.clone(),
+                    value: Box::new(Expr::Binary(BinaryExpr {
+                        left: Box::new(Expr::Var(VarExpr {
+                            name: var_name.clone(),
+                        })),
+                        operator: token(TokenType::Plus),
+                        right: Box::new(literal(number(1.0))),
+                    })),
+                })),
+            })),
+        });
+
+        terp.execute(&init_var).expect("failed to initalize counter");
+
+        let result = terp.execute(&stmt);
+
+        assert!(result.is_ok());
+
+        let value = read_var(terp, "count");
+
+        assert!(matches!(value, Value::Number(n) if n == 5.0));
     }
 }
