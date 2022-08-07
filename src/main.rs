@@ -7,20 +7,31 @@ use std::{
 
 mod ast;
 mod interpreter;
+mod environment;
 mod lox_error;
 mod parser;
 mod scanner;
 
-use parser::parser::Parser;
+use parser::Parser;
 use stringreader::StringReader;
 
-use crate::{ast::*, interpreter::interpreter::Interpreter, scanner::scanner::Scanner};
+use crate::{ast::*, interpreter::Interpreter, scanner::Scanner};
 
-pub struct Lox {}
+pub struct Lox {
+    interpreter: Interpreter,
+}
+
+impl Default for Lox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Lox {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            interpreter: Interpreter::new(),
+        }
     }
     pub fn run_promt(&self) {
         let stdin = io::stdin();
@@ -54,20 +65,23 @@ impl Lox {
     }
     fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
         let mut had_error = false;
-        let mut parser = Parser::new(Scanner::new(reader));
+        let mut parser = Parser::new(Box::new(Scanner::new(reader)));
         let printer = AstPrinter {};
-        let interpreter = Interpreter::new();
 
         loop {
             match parser.declaration() {
                 Ok(stmt) => match stmt {
                     Some(stmt) => {
                         println!(
-                            "Interpreting statement {}",
+                            "Parsed statement {}",
                             printer.print(&stmt).unwrap()
                         );
+                        // Don't evaluate the next statement it it failed before
+                        if had_error {
+                            continue;
+                        }
 
-                        match interpreter.evaluate(&stmt) {
+                        match self.interpreter.execute(&stmt) {
                             Ok(_) => {}
                             Err(_) => {
                                 had_error = true;

@@ -14,6 +14,9 @@ impl Token {
     pub fn new(ttype: TokenType, lexeme: String, line: usize, literal: Option<Value>) -> Self {
         Self { ttype, lexeme, line, literal }
     }
+    pub fn as_string(&self) -> String {
+        self.lexeme.clone()
+    }
 }
 
 impl fmt::Display for Token {

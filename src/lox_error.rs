@@ -1,12 +1,14 @@
 use std::fmt;
 
-use crate::{scanner::token::Token, ast::Expr};
+use crate::{scanner::token::Token};
+
+pub type LoxResult<T> = Result<T, LoxError>;
 
 #[derive(Debug)]
 pub enum LoxError {
     Scanner { line: usize, message: String },
     Parser { token: Token, message: String },
-    Interpreter { expr: Expr, message: String },
+    Interpreter { token: Token, message: String },
 }
 
 impl LoxError {
@@ -26,9 +28,9 @@ impl fmt::Display for LoxError {
                 writeln!(f, "parser error: {}", message)?;
                 write!(f, "{} |", token.line)
             }
-            LoxError::Interpreter { expr:_, message } => {
+            LoxError::Interpreter { token, message } => {
                 writeln!(f, "interpreter error: {}", message)?;
-                write!(f, "{} |", false) // TODO: display interpreter error
+                write!(f, "{} |", token.line)
             }
         }
     }
