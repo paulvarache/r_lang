@@ -1,11 +1,15 @@
 use std::fmt;
 
-use crate::scanner::token::Token;
+use crate::scanner::token::{Span, Token};
 
 pub type LoxResult<T> = Result<T, LoxError>;
 
 #[derive(Copy, Clone, Debug)]
-pub enum ScannerErrorCode {}
+pub enum ScannerErrorCode {
+    Unknown,
+    NumberParsingError,
+    UnterminatedString,
+}
 #[derive(Copy, Clone, Debug)]
 pub enum ParserErrorCode {
     None,
@@ -43,6 +47,13 @@ pub enum ParserErrorCode {
     UnterminatedGroup,
     MissingClosingParenAfterGroup,
     UnexpectedTokenInExpression,
+    FunctionCallToManyArguments,
+    MissingIdentifierAfterFunKeyword,
+    MissingOpenParenAfterFunIdentifier,
+    MissingParameterNameInFunDefinition,
+    FunctionDefinitionToManyArguments,
+    MissingCommaAfterFunctionParameterName,
+    MissingOpenBraceAfterFunctionDefinition,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -67,21 +78,21 @@ impl fmt::Display for LoxErrorCode {
 
 #[derive(Debug)]
 pub enum LoxError {
-    Scanner {
-        line: usize,
-        message: String,
-    },
+    Scanner(ScannerError),
     Parser(ParserError),
-    Interpreter {
-        token: Token,
-        message: String,
-    },
+    Interpreter { token: Token, message: String },
 }
 
 impl LoxError {
     pub fn report(&self) {
         eprintln!("{}", self)
     }
+}
+#[derive(Debug)]
+pub struct ScannerError {
+    pub span: Span,
+    pub next_c: Option<u8>,
+    pub code: LoxErrorCode,
 }
 
 #[derive(Debug)]
@@ -98,17 +109,16 @@ pub trait Demistify {
 impl fmt::Display for LoxError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            LoxError::Scanner { line, message } => {
-                writeln!(
+            LoxError::Scanner(err) => {
+                writeln!(f, "{}", err.demistify())?;
+                write!(
                     f,
-                    "scanner error: {}{}",
-                    message,
-                    LoxErrorCode::Parser(ParserErrorCode::UnterminatedArgumentList)
-                )?;
-                write!(f, "{} |", line)
+                    "({},{}) -> ({}, {}) |",
+                    err.span.start.0, err.span.start.1, err.span.end.0, err.span.end.1
+                )
             }
             LoxError::Parser(err) => {
-                writeln!(f, "{}", err.demistify());
+                writeln!(f, "{}", err.demistify())?;
                 write!(f, "{} | {}", err.token.line, err.token.lexeme.clone())
             }
             LoxError::Interpreter { token, message } => {

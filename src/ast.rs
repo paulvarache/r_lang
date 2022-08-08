@@ -1,4 +1,5 @@
 use r_ast::define_ast;
+use std::rc::Rc;
 
 use crate::lox_error::LoxError;
 use crate::scanner::token::Token;
@@ -18,6 +19,7 @@ define_ast!(Expr(
 define_ast!(Stmt(
     Block: { statements: Vec<Stmt> },
     Expression: { expression: Expr },
+    Function: {name: Token, params: Vec<Token>, body: Vec<Stmt> },
     If: { predicate: Expr, then_branch: Stmt, else_branch: Option<Stmt> },
     Print: { expression: Expr },
     Var: { name: Token, initializer: Expr },
@@ -63,6 +65,7 @@ impl ExprVisitor<String> for AstPrinter {
             Value::Number(n) => Ok(format!("{}", n)),
             Value::String(s) => Ok(s.to_string()),
             Value::Bool(b) => Ok(format!("{}", b)),
+            Value::Func(_) => Ok("func".to_string()),
             Value::Nil => Ok("nil".to_string()),
         }
     }
@@ -79,8 +82,9 @@ impl ExprVisitor<String> for AstPrinter {
         Ok(format!("{}", expr.name))
     }
 
-    fn visit_call_expr(&self,expr: &CallExpr) -> Result<String,LoxError>  {
-        let args = expr.arguments
+    fn visit_call_expr(&self, expr: &CallExpr) -> Result<String, LoxError> {
+        let args = expr
+            .arguments
             .iter()
             .try_fold(String::new(), |acc, expr| Ok(acc + &expr.accept(self)?))?;
 
@@ -126,5 +130,9 @@ impl StmtVisitor<String> for AstPrinter {
             stmt.predicate.accept(self)?,
             stmt.body.accept(self)?
         ))
+    }
+
+    fn visit_function_stmt(&self,stmt: &FunctionStmt) -> Result<String,LoxError>  {
+        todo!()
     }
 }

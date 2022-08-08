@@ -5,30 +5,46 @@ pub mod value;
 use std::io::{self, BufRead, BufReader, Read};
 
 use crate::{
-    lox_error::{LoxError, LoxResult},
+    lox_error::{Demistify, LoxError, LoxErrorCode, LoxResult, ScannerError, ScannerErrorCode},
     scanner::value::Value,
 };
 
-use self::{token::Token, token_type::TokenType};
+use self::{
+    token::{Span, Token},
+    token_type::TokenType,
+};
 
-impl LoxError {
-    pub fn scanner(line: usize, message: String) -> Self {
-        let err = LoxError::Scanner { line, message };
-        err.report();
-        err
+impl Demistify for ScannerError {
+    fn demistify(&self) -> String {
+        match self.code {
+            LoxErrorCode::Scanner(code) => match code {
+                ScannerErrorCode::NumberParsingError => {
+                    format!("could not parse number at '({}, {}) -> ({}, {})'", self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1)
+                }
+                ScannerErrorCode::UnterminatedString => {
+                    format!("unterminated string at '({}, {}) -> ({}, {})'", self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1)
+                }
+                ScannerErrorCode::Unknown => "".to_string(),
+            },
+            _ => "".to_string(),
+        }
     }
 }
 
 pub trait Scan {
     fn line(&self) -> usize;
+    fn span(&self) -> Span;
     fn next(&mut self) -> LoxResult<Option<Token>>;
 }
 
 pub struct Scanner<'a> {
+    last: Option<u8>,
     cursor: usize,
     buffer: Vec<u8>,
     reached_end: bool,
     line: usize,
+    col: usize,
+    position: (usize, usize),
     reader: BufReader<Box<dyn io::Read + 'a>>,
 }
 
@@ -48,29 +64,22 @@ impl<'a> Scan for Scanner<'a> {
     fn line(&self) -> usize {
         self.line
     }
+    fn span(&self) -> Span {
+        Span::new(self.position.0, self.position.1, self.line, self.col)
+    }
     fn next(&mut self) -> Result<Option<Token>, LoxError> {
         if self.reached_end {
             return Ok(None);
         }
         if self.is_at_end() {
             self.reached_end = true;
-            return Ok(Some(Token::new(
-                TokenType::Eof,
-                String::from(""),
-                self.line,
-                None,
-            )));
+            return Ok(Some(self.get_token(TokenType::Eof)));
         }
         let c = self.advance();
         match c {
             None => {
                 self.reached_end = true;
-                Ok(Some(Token::new(
-                    TokenType::Eof,
-                    String::from(""),
-                    self.line,
-                    None,
-                )))
+                Ok(Some(self.get_token(TokenType::Eof)))
             }
             Some(c) => match c {
                 b'(' => Ok(Some(self.get_token(TokenType::OpenParen))),
@@ -112,16 +121,14 @@ impl<'a> Scan for Scanner<'a> {
                 }
                 b'\n' => {
                     self.skip();
+                    self.col = 1;
                     self.line += 1;
                     self.next()
                 }
                 b'"' => self.get_string(),
                 b'0'..=b'9' => self.get_number(),
                 _ if is_alpha(c) => self.get_identifier(),
-                _ => Err(LoxError::scanner(
-                    self.line,
-                    "Unexpected character".to_string(),
-                )),
+                _ => Err(self.error(ScannerErrorCode::Unknown)),
             },
         }
     }
@@ -130,12 +137,31 @@ impl<'a> Scan for Scanner<'a> {
 impl<'a> Scanner<'a> {
     pub fn new(r: Box<dyn io::Read + 'a>) -> Self {
         Self {
+            last: None,
             cursor: 0,
             line: 1,
+            col: 1,
+            position: (1, 1),
             reached_end: false,
             buffer: Vec::new(),
             reader: BufReader::new(r),
         }
+    }
+    pub fn error(&mut self, code: ScannerErrorCode) -> LoxError {
+        let next_c = self.peek();
+        match self.last {
+            Some(last) => self.report_error(next_c, code),
+            None => self.report_error(next_c, code),
+        }
+    }
+    fn report_error(&mut self, next_c: Option<u8>, code: ScannerErrorCode) -> LoxError {
+        let err = LoxError::Scanner(ScannerError {
+            span: self.span(),
+            next_c,
+            code: LoxErrorCode::Scanner(code),
+        });
+        err.report();
+        err
     }
     // TODO: https://doc.rust-lang.org/std/io/trait.BufRead.html#method.has_data_left
     pub fn is_at_end(&mut self) -> bool {
@@ -152,6 +178,7 @@ impl<'a> Scanner<'a> {
     fn advance(&mut self) -> Option<u8> {
         match self.peek() {
             Some(c) => {
+                self.col += 1;
                 self.cursor += 1;
                 Some(c)
             }
@@ -161,6 +188,7 @@ impl<'a> Scanner<'a> {
     fn skip(&mut self) {
         self.buffer = self.buffer[self.cursor..].to_vec();
         self.cursor = 0;
+        self.position = (self.line, self.col);
     }
     fn is_match(&mut self, c: u8) -> bool {
         match self.peek() {
@@ -188,6 +216,7 @@ impl<'a> Scanner<'a> {
         let s = String::from_utf8(self.buffer.clone()).expect("Failed to parse utf-8");
         self.buffer = leftover;
         self.cursor = 0;
+        self.position = (self.line, self.col);
 
         s
     }
@@ -200,34 +229,31 @@ impl<'a> Scanner<'a> {
         self.get_token(tok)
     }
     fn get_token(&mut self, ttype: TokenType) -> Token {
-        Token::new(ttype, self.consume(), self.line, None)
+        Token::new(ttype, self.consume(), 0, self.span(), None)
+    }
+    fn get_token_literal(&mut self, ttype: TokenType, literal: Value) -> Token {
+        let span = Span::new(self.position.0, self.position.1, self.line, self.col);
+        Token::new(ttype, self.consume(), 0, self.span(), Some(literal))
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
         loop {
             match self.peek() {
                 Some(c) if c != b'"' => {
                     if c == b'\n' {
+                        self.col = 1;
                         self.line += 1;
                     }
                     self.advance();
                 }
                 None => {
-                    return Err(LoxError::scanner(
-                        self.line,
-                        "Unterminated string".to_string(),
-                    ));
+                    return Err(self.error(ScannerErrorCode::UnterminatedString));
                 }
                 _ => {
                     self.advance(); // Eat the closing "
 
                     let s: String = String::from_utf8(self.buffer[1..self.cursor - 1].to_vec())
                         .expect("Failed to parse utf-8");
-                    return Ok(Some(Token::new(
-                        TokenType::String,
-                        self.consume(),
-                        self.line,
-                        Some(Value::String(s)),
-                    )));
+                    return Ok(Some(self.get_token_literal(TokenType::String, Value::String(s))))
                 }
             }
         }
@@ -257,16 +283,8 @@ impl<'a> Scanner<'a> {
         }
         let s = self.consume();
         match s.clone().parse::<f64>() {
-            Err(_) => Err(LoxError::scanner(
-                self.line,
-                "Could not parse number".to_string(),
-            )),
-            Ok(literal) => Ok(Some(Token::new(
-                TokenType::Number,
-                s,
-                self.line,
-                Some(Value::Number(literal)),
-            ))),
+            Err(_) => Err(self.error(ScannerErrorCode::NumberParsingError)),
+            Ok(n) => Ok(Some(self.get_token_literal(TokenType::Number, Value::Number(n)))),
         }
     }
     fn get_identifier(&mut self) -> Result<Option<Token>, LoxError> {
@@ -284,7 +302,8 @@ impl<'a> Scanner<'a> {
         let ttype = self
             .get_keyword_token_type(&lexeme)
             .unwrap_or(TokenType::Identifier);
-        Ok(Some(Token::new(ttype, lexeme, self.line, None)))
+
+        Ok(Some(self.get_token(ttype)))
     }
     fn skip_comment(&mut self) {
         loop {
@@ -371,5 +390,30 @@ mod tests {
             let literal = opt_inner.literal.unwrap();
             assert_eq!(literal, Value::String(i.to_string()));
         }
+    }
+
+    #[test]
+    fn line() {
+        let reader = StringReader::new("\n\n\n\n");
+        let mut scanner = Scanner::new(Box::new(reader));
+
+        assert_eq!(scanner.line, 1);
+        assert!(scanner.next().is_ok());
+        assert_eq!(scanner.line, 5);
+    }
+    #[test]
+    fn col() {
+        let reader = StringReader::new("var a\nvar\n");
+        let mut scanner = Scanner::new(Box::new(reader));
+
+        assert_eq!(scanner.line, 1);
+        assert_eq!(scanner.col, 1);
+        assert!(scanner.next().is_ok());
+        assert_eq!(scanner.col, 4);
+        assert!(scanner.next().is_ok());
+        assert_eq!(scanner.col, 6);
+        assert!(scanner.next().is_ok());
+        assert_eq!(scanner.line, 2);
+        assert_eq!(scanner.col, 4);
     }
 }

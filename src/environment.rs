@@ -11,7 +11,7 @@ use crate::{
 
 type Link = Option<Rc<RefCell<Environment>>>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Environment {
     values: HashMap<String, Value>,
     enclosing: Link,
@@ -65,12 +65,13 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::environment::Environment;
+    use crate::scanner::token::Span;
     use crate::scanner::token::Token;
     use crate::scanner::token_type::TokenType;
     use crate::scanner::value::Value;
 
     fn token_lex(ttype: TokenType, lexeme: &str) -> Token {
-        Token::new(ttype, lexeme.to_string(), 0, None)
+        Token::new(ttype, lexeme.to_string(), 0, Span::new(0,0,0,0), None)
     }
 
     #[test]

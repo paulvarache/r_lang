@@ -1,5 +1,4 @@
 use std::fmt;
-use std::fmt::format;
 
 use crate::lox_error::Demistify;
 
@@ -7,19 +6,33 @@ use super::token_type::TokenType;
 use super::value::Value;
 
 #[derive(Debug, Clone)]
+pub struct Span {
+    pub start: (usize, usize),
+    pub end: (usize, usize),
+}
+
+impl Span {
+    pub fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
+        Self { start: (start_line, start_col), end: (end_line, end_col) }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Token {
     pub ttype: TokenType,
     pub lexeme: String,
     pub line: usize,
+    pub span: Span,
     pub literal: Option<Value>,
 }
 
 impl Token {
-    pub fn new(ttype: TokenType, lexeme: String, line: usize, literal: Option<Value>) -> Self {
+    pub fn new(ttype: TokenType, lexeme: String, line: usize, span: Span, literal: Option<Value>) -> Self {
         Self {
             ttype,
             lexeme,
             line,
+            span,
             literal,
         }
     }

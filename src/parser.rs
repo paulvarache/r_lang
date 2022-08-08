@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::ast::*;
 use crate::lox_error::Demistify;
 use crate::lox_error::LoxError;
@@ -70,10 +72,7 @@ impl Demistify for ParserError {
                     )
                 }
                 ParserErrorCode::MissingOpenParenAfterIfKeyword => {
-                    format!(
-                        "expected '(' after if{}",
-                        self.demistify_next_token()
-                    )
+                    format!("expected '(' after if{}", self.demistify_next_token())
                 }
                 ParserErrorCode::UnterminatedIfPredicate => "UnterminatedIfPredicate".to_string(),
                 ParserErrorCode::MissingClosingParenAfterIfPredicate => {
@@ -134,6 +133,28 @@ impl Demistify for ParserError {
                 ParserErrorCode::UnexpectedTokenInExpression => {
                     "UnexpectedTokenInExpression".to_string()
                 }
+                ParserErrorCode::FunctionCallToManyArguments => {
+                    "too many arguments passed to function".to_string()
+                }
+                ParserErrorCode::MissingIdentifierAfterFunKeyword => {
+                    "MissingIdentifierAfterFunKeyword".to_string()
+                }
+                ParserErrorCode::MissingOpenParenAfterFunIdentifier => {
+                    "MissingOpenParenAfterFunIdentifier".to_string()
+                }
+                ParserErrorCode::MissingParameterNameInFunDefinition => {
+                    "MissingParameterNameInFunDefinition".to_string()
+                }
+                ParserErrorCode::FunctionDefinitionToManyArguments => {
+                    "FunctionDefinitionToManyArguments".to_string()
+                }
+                ParserErrorCode::MissingCommaAfterFunctionParameterName => {
+                    "MissingCommaAfterFunctionParameterName".to_string()
+                }
+                ParserErrorCode::MissingOpenBraceAfterFunctionDefinition => {
+                    "MissingOpenBraceAfterFunctionDefinition".to_string()
+                }
+                // c => format!("missing error demistifyer for {}", c as u32),
             },
             _ => "".to_string(),
         }
@@ -156,12 +177,17 @@ impl<'a> Parser<'a> {
     }
 
     // declaration -> "var" var_declaration
+    //              | "fun" func_declaration
     //              | statement
     pub fn declaration(&mut self) -> Result<Option<Stmt>, LoxError> {
-        let r = match self.is_match(&[TokenType::Var])? {
-            Some(_) => self.var_declaration(),
-            None => self.statement(),
+        let r = if self.is_match(&[TokenType::Fun])?.is_some() {
+            self.fun_declaration()
+        } else if self.is_match(&[TokenType::Var])?.is_some() {
+            self.var_declaration()
+        } else {
+            self.statement()
         };
+
         // Continue if the declaration failed
         match r {
             Ok(r) => Ok(r),
@@ -191,8 +217,50 @@ impl<'a> Parser<'a> {
 
         Ok(Some(Stmt::Var(VarStmt {
             name,
-            initializer: Box::new(initializer),
+            initializer: Rc::new(initializer),
         })))
+    }
+
+    // fun_declaration -> IDENTIFIER "(" parameters? ")" block;
+    fn fun_declaration(&mut self) -> LoxResult<Option<Stmt>> {
+        let name = self.consume(
+            TokenType::Identifier,
+            ParserErrorCode::MissingIdentifierAfterFunKeyword,
+        )?;
+        self.consume(
+            TokenType::OpenParen,
+            ParserErrorCode::MissingOpenParenAfterFunIdentifier,
+        )?;
+
+        let mut params = Vec::new();
+
+        while self.is_match(&[TokenType::CloseParen])?.is_none() {
+            if params.len() > 255 {
+                return Err(self.error(ParserErrorCode::FunctionDefinitionToManyArguments));
+            }
+            let param = self.consume(
+                TokenType::Identifier,
+                ParserErrorCode::MissingParameterNameInFunDefinition,
+            )?;
+
+            params.push(param);
+
+            if self.is_match(&[TokenType::CloseParen])?.is_none() {
+                self.consume(
+                    TokenType::Comma,
+                    ParserErrorCode::MissingCommaAfterFunctionParameterName,
+                )?;
+            }
+        }
+
+        self.consume(
+            TokenType::OpenBrace,
+            ParserErrorCode::MissingOpenBraceAfterFunctionDefinition,
+        )?;
+
+        let body = self.block()?;
+
+        Ok(Some(Stmt::new_function(name, Rc::new(params), Rc::new(body))))
     }
 
     // statement -> exprStmt
@@ -222,7 +290,7 @@ impl<'a> Parser<'a> {
                 }
                 TokenType::OpenBrace => {
                     self.skip()?;
-                    self.block()
+                    Ok(Some(Stmt::new_block(Rc::new(self.block()?))))
                 }
                 _ => self.expression_statement(),
             },
@@ -239,7 +307,7 @@ impl<'a> Parser<'a> {
             TokenType::Semicolon,
             ParserErrorCode::MissingSemicolonAfterPrintStatement,
         )?;
-        Ok(Some(Stmt::new_print(Box::new(expr))))
+        Ok(Some(Stmt::new_print(Rc::new(expr))))
     }
     fn if_statement(&mut self) -> LoxResult<Option<Stmt>> {
         self.consume(
@@ -265,9 +333,9 @@ impl<'a> Parser<'a> {
             );
         }
         Ok(Some(Stmt::new_if(
-            Box::new(predicate),
-            Box::new(then_branch),
-            else_branch.map(Box::new),
+            Rc::new(predicate),
+            Rc::new(then_branch),
+            else_branch.map(Rc::new),
         )))
     }
     fn while_statement(&mut self) -> LoxResult<Option<Stmt>> {
@@ -288,7 +356,7 @@ impl<'a> Parser<'a> {
             .statement()?
             .ok_or_else(|| self.error(ParserErrorCode::MissingStatementAfterWhile))?;
 
-        Ok(Some(Stmt::new_while(Box::new(predicate), Box::new(body))))
+        Ok(Some(Stmt::new_while(Rc::new(predicate), Rc::new(body))))
     }
     fn for_statement(&mut self) -> LoxResult<Option<Stmt>> {
         self.consume(
@@ -324,11 +392,11 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.error(ParserErrorCode::MissingForBody))?;
 
         if let Some(increment) = increment {
-            body = Stmt::new_block(vec![body, Stmt::new_expression(Box::new(increment))]);
+            body = Stmt::new_block(Rc::new(vec![Rc::new(body), Rc::new(Stmt::new_expression(Rc::new(increment)))]));
         }
-        body = Stmt::new_while(Box::new(predicate), Box::new(body));
+        body = Stmt::new_while(Rc::new(predicate), Rc::new(body));
         if let Some(initializer) = initializer {
-            body = Stmt::new_block(vec![initializer, body]);
+            body = Stmt::new_block(Rc::new(vec![Rc::new(initializer), Rc::new(body)]));
         }
         Ok(Some(body))
     }
@@ -340,13 +408,13 @@ impl<'a> Parser<'a> {
                     TokenType::Semicolon,
                     ParserErrorCode::MissingSemicolonAfterExpressionStatement,
                 )
-                .and(Ok(Some(Stmt::new_expression(Box::new(expr))))),
+                .and(Ok(Some(Stmt::new_expression(Rc::new(expr))))),
 
             None => Ok(None),
         }
     }
 
-    fn block(&mut self) -> Result<Option<Stmt>, LoxError> {
+    fn block(&mut self) -> Result<Vec<Rc<Stmt>>, LoxError> {
         let mut statements = Vec::new();
 
         loop {
@@ -356,9 +424,9 @@ impl<'a> Parser<'a> {
             let decl = self
                 .declaration()?
                 .ok_or_else(|| self.error(ParserErrorCode::UnterminatedBlock))?;
-            statements.push(decl);
+            statements.push(Rc::new(decl));
         }
-        Ok(Some(Stmt::new_block(statements)))
+        Ok(statements)
     }
 
     // assignment -> IDENTIFIER "=" assignment
@@ -370,7 +438,7 @@ impl<'a> Parser<'a> {
                     .assignment()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedAssignment))?;
                 if let Expr::Var(v) = expr {
-                    return Ok(Some(Expr::new_assign(v.name.clone(), Box::new(value))));
+                    return Ok(Some(Expr::new_assign(v.name.clone(), Rc::new(value))));
                 }
                 return Err(self.error(ParserErrorCode::InvalidAssignmentTarget));
             }
@@ -386,7 +454,7 @@ impl<'a> Parser<'a> {
                 let right = self
                     .logic_or()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedLogicalOr))?;
-                expr = Expr::new_logical(Box::new(expr), operator, Box::new(right));
+                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right));
             }
             return Ok(Some(expr));
         }
@@ -399,7 +467,7 @@ impl<'a> Parser<'a> {
                 let right = self
                     .equality()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedLogicalAnd))?;
-                expr = Expr::new_logical(Box::new(expr), operator, Box::new(right));
+                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right));
             }
             return Ok(Some(expr));
         }
@@ -421,7 +489,7 @@ impl<'a> Parser<'a> {
                     let right = self
                         .comparison()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingEqualityRightHandSide))?;
-                    expr = Expr::new_binary(Box::new(expr), operator, Box::new(right))
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right))
                 }
                 Ok(Some(expr))
             }
@@ -441,7 +509,7 @@ impl<'a> Parser<'a> {
                     let right = self.term()?.ok_or_else(|| {
                         self.error(ParserErrorCode::MissingComparisonRightHandSide)
                     })?;
-                    expr = Expr::new_binary(Box::new(expr), operator, Box::new(right));
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
                 }
                 Ok(Some(expr))
             }
@@ -456,7 +524,7 @@ impl<'a> Parser<'a> {
                     let right = self
                         .factor()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingTermRightHandSide))?;
-                    expr = Expr::new_binary(Box::new(expr), operator, Box::new(right));
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
                 }
                 Ok(Some(expr))
             }
@@ -471,7 +539,7 @@ impl<'a> Parser<'a> {
                     let right = self
                         .unary()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingFactorRightHandSide))?;
-                    expr = Expr::new_binary(Box::new(expr), operator, Box::new(right));
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
                 }
                 Ok(Some(expr))
             }
@@ -484,7 +552,7 @@ impl<'a> Parser<'a> {
             let right = self
                 .term()?
                 .ok_or_else(|| self.error(ParserErrorCode::MissingUnaryRightHandSide))?;
-            return Ok(Some(Expr::new_unary(operator, Box::new(right))));
+            return Ok(Some(Expr::new_unary(operator, Rc::new(right))));
         }
         self.call()
     }
@@ -515,11 +583,14 @@ impl<'a> Parser<'a> {
         // Read arguments if there is no close paren in sight
         if !next_is_close_paren {
             loop {
+                if arguments.len() > 255 {
+                    return Err(self.error(ParserErrorCode::FunctionCallToManyArguments));
+                }
                 // Add the next expression, fail if missing
                 let arg = self
                     .expression()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedArgumentList))?;
-                arguments.push(arg);
+                arguments.push(Rc::new(arg));
                 // no ',' means end of argument list
                 if self.is_match(&[TokenType::Comma])?.is_none() {
                     break;
@@ -530,7 +601,7 @@ impl<'a> Parser<'a> {
             TokenType::CloseParen,
             ParserErrorCode::MissingClosingParenAfterArgumentList,
         )?;
-        Ok(Expr::new_call(Box::new(callee), arguments))
+        Ok(Expr::new_call(Rc::new(callee), Rc::new(arguments)))
     }
     // primary -> NUMBER | STRING | true | false | nil | '(' expression ')' | IDENTIFIER
     fn primary(&mut self) -> Result<Option<Expr>, LoxError> {
@@ -572,7 +643,7 @@ impl<'a> Parser<'a> {
                         TokenType::CloseParen,
                         ParserErrorCode::MissingClosingParenAfterGroup,
                     )?;
-                    Ok(Some(Expr::new_grouping(Box::new(expr))))
+                    Ok(Some(Expr::new_grouping(Rc::new(expr))))
                 }
                 TokenType::Identifier => {
                     self.skip()?;
@@ -670,13 +741,18 @@ impl<'a> Parser<'a> {
         let next = self.peek().unwrap_or(None);
         match &self.last {
             Some(token) => self.report_error(token, &next, code),
-            None => LoxError::scanner(self.scanner.line(), "".to_string()), //todo code
+            None => self.report_error(
+                &Token::new(
+                    TokenType::Eof,
+                    "".to_string(),
+                    self.scanner.line(),
+                    self.scanner.span(),
+                    None,
+                ),
+                &None,
+                code,
+            ), //todo code
         }
-    }
-    /// reports a parser error. The passed token will be considered the place of the error
-    /// the parser's last token will be used as next_token
-    fn error_with_token(&self, token: &Token, code: ParserErrorCode) -> LoxError {
-        self.report_error(token, &self.last, code)
     }
     fn report_error(
         &self,
@@ -696,10 +772,17 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use crate::{
         ast::{CallExpr, Expr, LiteralExpr, Stmt, VarExpr},
         lox_error::{LoxResult, ParserErrorCode},
-        scanner::{token::Token, token_type::TokenType, value::Value, Scan},
+        scanner::{
+            token::{Span, Token},
+            token_type::TokenType,
+            value::Value,
+            Scan,
+        },
     };
 
     use super::Parser;
@@ -719,6 +802,10 @@ mod tests {
             999
         }
 
+        fn span(&self) -> Span {
+            Span::new(0, 0, 0, 0)
+        }
+
         fn next(&mut self) -> LoxResult<Option<Token>> {
             Ok(match self.tokens.len() {
                 0 => None,
@@ -728,10 +815,16 @@ mod tests {
     }
 
     fn token(ttype: TokenType) -> Token {
-        Token::new(ttype, format!(""), 999, None)
+        Token::new(ttype, format!(""), 999, Span::new(0, 0, 0, 0), None)
     }
     fn token_literal(ttype: TokenType, literal: Value) -> Token {
-        Token::new(ttype, format!(""), 999, Some(literal))
+        Token::new(
+            ttype,
+            format!(""),
+            999,
+            Span::new(0, 0, 0, 0),
+            Some(literal),
+        )
     }
 
     fn test_parse_stmt(tokens: Vec<Token>) -> LoxResult<Option<Stmt>> {
@@ -1024,8 +1117,8 @@ mod tests {
         let expr = result.expect("").expect("");
 
         if let Expr::Call(CallExpr { callee, arguments }) = expr {
-            if let Expr::Var(VarExpr { name }) = *callee {
-                if let Some(Value::String(s)) = name.literal {
+            if let Expr::Var(VarExpr { name }) = &*callee.clone() {
+                if let Some(Value::String(s)) = &name.literal {
                     assert_eq!(s, "my_fn");
                 } else {
                     assert!(false);

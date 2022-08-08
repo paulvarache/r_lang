@@ -1,10 +1,13 @@
-use std::{fmt, ops, cmp::{self, Ordering}};
+use std::{fmt, ops, cmp::{self, Ordering}, rc::Rc};
+
+use crate::function::LoxFunction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Number(f64),
     Bool(bool),
+    Func(Rc<LoxFunction>),
     Nil,
 }
 
@@ -14,6 +17,7 @@ impl fmt::Display for Value {
             Value::String(s) => write!(f, "String({})", s),
             Value::Number(n) => write!(f, "Number({})", n),
             Value::Bool(b) => write!(f, "Bool({})", b),
+            Value::Func(_) => write!(f, "Func()"),
             Value::Nil => write!(f, "Nil"),
         }
     }

@@ -13,6 +13,9 @@ mod interpreter;
 mod lox_error;
 mod parser;
 mod scanner;
+mod native;
+mod callable;
+mod function;
 
 use parser::Parser;
 use stringreader::StringReader;
