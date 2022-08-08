@@ -1,13 +1,15 @@
-use std::{
-    env,
-    fs::File,
-    io::{self, stdout, BufRead, BufReader, Write},
-    process,
-};
+use std::env;
+use std::fs::File;
+use std::io;
+use std::io::stdout;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
+use std::process;
 
 mod ast;
-mod interpreter;
 mod environment;
+mod interpreter;
 mod lox_error;
 mod parser;
 mod scanner;
@@ -15,7 +17,8 @@ mod scanner;
 use parser::Parser;
 use stringreader::StringReader;
 
-use crate::{ast::*, interpreter::Interpreter, scanner::Scanner};
+use crate::interpreter::Interpreter;
+use crate::scanner::Scanner;
 
 pub struct Lox {
     interpreter: Interpreter,
@@ -88,8 +91,8 @@ impl Lox {
                                 break;
                             }
                         }
-                    },
-                    None => break
+                    }
+                    None => break,
                 },
                 Err(_) => had_error = true,
             };

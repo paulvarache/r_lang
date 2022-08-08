@@ -218,6 +218,10 @@ impl ExprVisitor<Value> for Interpreter {
     fn visit_var_expr(&self, expr: &crate::ast::VarExpr) -> LoxResult<Value> {
         self.environment.borrow().borrow().get(&expr.name)
     }
+
+    fn visit_call_expr(&self,expr: &CallExpr) -> Result<Value,LoxError>  {
+        Ok(Value::Nil)
+    }
 }
 
 #[cfg(test)]

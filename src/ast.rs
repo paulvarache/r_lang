@@ -7,6 +7,7 @@ use crate::scanner::value::Value;
 define_ast!(Expr(
     Assign: { name: Token, value: Expr },
     Binary: { left: Expr, operator: Token, right: Expr },
+    Call: { callee: Expr, arguments: Vec<Expr> },
     Grouping: { expression: Expr },
     Literal: { value: Value },
     Logical: { left: Expr, operator: Token, right: Expr },
@@ -42,8 +43,12 @@ impl AstPrinter {
 }
 
 impl ExprVisitor<String> for AstPrinter {
-    fn visit_assign_expr(&self,expr: &AssignExpr) -> Result<String,LoxError>  {
-        Ok(format!("(set {} {})", expr.name.as_string(), expr.value.accept(self)?))
+    fn visit_assign_expr(&self, expr: &AssignExpr) -> Result<String, LoxError> {
+        Ok(format!(
+            "(set {} {})",
+            expr.name.as_string(),
+            expr.value.accept(self)?
+        ))
     }
     fn visit_binary_expr(&self, expr: &BinaryExpr) -> Result<String, LoxError> {
         self.parenthesize(&expr.operator.lexeme, &[&expr.left, &expr.right])
@@ -62,7 +67,7 @@ impl ExprVisitor<String> for AstPrinter {
         }
     }
 
-    fn visit_logical_expr(&self,expr: &LogicalExpr) -> Result<String,LoxError>  {
+    fn visit_logical_expr(&self, expr: &LogicalExpr) -> Result<String, LoxError> {
         self.parenthesize(&expr.operator.lexeme, &[&expr.left, &expr.right])
     }
 
@@ -72,6 +77,14 @@ impl ExprVisitor<String> for AstPrinter {
 
     fn visit_var_expr(&self, expr: &VarExpr) -> Result<String, LoxError> {
         Ok(format!("{}", expr.name))
+    }
+
+    fn visit_call_expr(&self,expr: &CallExpr) -> Result<String,LoxError>  {
+        let args = expr.arguments
+            .iter()
+            .try_fold(String::new(), |acc, expr| Ok(acc + &expr.accept(self)?))?;
+
+        Ok(format!("call {} ({})", expr.callee.accept(self)?, args))
     }
 }
 
@@ -107,7 +120,11 @@ impl StmtVisitor<String> for AstPrinter {
         self.parenthesize(&"var".to_string(), &[&stmt.initializer])
     }
 
-    fn visit_while_stmt(&self,stmt: &WhileStmt) -> Result<String,LoxError>  {
-        Ok(format!("(while {} {})", stmt.predicate.accept(self)?, stmt.body.accept(self)?))
+    fn visit_while_stmt(&self, stmt: &WhileStmt) -> Result<String, LoxError> {
+        Ok(format!(
+            "(while {} {})",
+            stmt.predicate.accept(self)?,
+            stmt.body.accept(self)?
+        ))
     }
 }
