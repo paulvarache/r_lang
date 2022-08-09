@@ -33,29 +33,23 @@ impl Environment {
     pub fn define(&mut self, name: &str, value: Value) {
         self.values.insert(name.to_string(), value);
     }
-    pub fn get(&self, name: &Token) -> LoxResult<Value> {
+    pub fn get(&self, name: &Token) -> Option<Value> {
         if let Some(value) = self.values.get(&name.as_string()) {
-            Ok(value.clone())
+            Some(value.clone())
         } else if let Some(enclosing) = &self.enclosing {
             enclosing.borrow().get(name)
         } else {
-            Err(LoxError::interpreter(
-                name,
-                format!("undefined variable {}", name.as_string()),
-            ))
+            None
         }
     }
-    pub fn assign(&mut self, name: &Token, value: Value) -> Result<(), LoxError> {
+    pub fn assign(&mut self, name: &Token, value: Value) -> bool {
         if let Entry::Occupied(mut val) = self.values.entry(name.as_string()) {
             val.insert(value);
-            Ok(())
+            return true;
         } else if let Some(enclosing) = &self.enclosing {
-            enclosing.borrow_mut().assign(name, value)
+            return enclosing.borrow_mut().assign(name, value);
         } else {
-            Err(LoxError::interpreter(
-                name,
-                format!("undefined variable {}", name.as_string()),
-            ))
+            return false;
         }
     }
 }
@@ -93,7 +87,7 @@ mod tests {
 
         let tok = token_lex(TokenType::Identifier, "hello");
 
-        assert!(e.assign(&tok, Value::Number(7.0)).is_ok());
+        assert!(e.assign(&tok, Value::Number(7.0)));
 
         assert!(e.values.contains_key("hello"));
         assert_eq!(
@@ -108,7 +102,7 @@ mod tests {
 
         let tok = token_lex(TokenType::Identifier, "nope");
 
-        assert!(e.assign(&tok, Value::Number(7.0)).is_err());
+        assert!(!e.assign(&tok, Value::Number(7.0)));
     }
 
     #[test]
@@ -116,7 +110,7 @@ mod tests {
         let e = Environment::new();
         let tok = token_lex(TokenType::Identifier, "nope");
 
-        assert!(e.get(&tok).is_err());
+        assert!(e.get(&tok).is_none());
     }
 
     #[test]
@@ -128,7 +122,7 @@ mod tests {
 
         let tok = token_lex(TokenType::Identifier, "hello");
 
-        assert_eq!(f.get(&tok).ok(), Some(Value::Number(9.0)))
+        assert_eq!(f.get(&tok), Some(Value::Number(9.0)))
     }
 
     #[test]
@@ -140,8 +134,8 @@ mod tests {
 
         let tok = token_lex(TokenType::Identifier, "hello");
 
-        assert!(f.assign(&tok, Value::Number(7.0)).is_ok());
+        assert!(f.assign(&tok, Value::Number(7.0)));
 
-        assert_eq!(f.get(&tok).ok(), Some(Value::Number(7.0)));
+        assert_eq!(f.get(&tok), Some(Value::Number(7.0)));
     }
 }

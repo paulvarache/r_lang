@@ -6,18 +6,26 @@ use crate::callable::LoxCallable;
 use crate::environment::*;
 use crate::function::LoxFunction;
 use crate::lox_error::*;
-use crate::scanner::token::Token;
+use crate::scanner::token::Span;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
 
-impl LoxError {
-    pub fn interpreter(token: &Token, message: String) -> Self {
-        let err = LoxError::Interpreter {
-            token: token.clone(),
-            message,
-        };
-        err.report();
-        err
+impl Demistify for InterpreterError {
+    fn demistify(&self) -> String {
+        match self.code {
+            InterpreterErrorCode::NumberBinaryExprOperandsIncorrectType => {
+                "NumberBinaryExprOperandsIncorrectType".to_string()
+            }
+            InterpreterErrorCode::PlusExprOperandsIncorrectType => {
+                "PlusExprOperandsIncorrectType".to_string()
+            }
+            InterpreterErrorCode::UnknownBinaryOperator => "UnknownBinaryOperator".to_string(),
+            InterpreterErrorCode::UnknownLogicalOperator => "UnknownLogicalOperator".to_string(),
+            InterpreterErrorCode::UnaryMinusInvalidType => "UnaryMinusInvalidType".to_string(),
+            InterpreterErrorCode::UnaryUnknownOperator => "UnaryUnknownOperator".to_string(),
+            InterpreterErrorCode::AssignToUndefinedVar => "AssignToUndefinedVar".to_string(),
+            InterpreterErrorCode::ReadUndefinedVar => "ReadUndefinedVar".to_string(),
+        }
     }
 }
 
@@ -62,11 +70,16 @@ impl Interpreter {
     ) -> Result<Value, LoxError> {
         match (left, right) {
             (Value::Number(l), Value::Number(r)) => Ok(solver(l, r)),
-            _ => Err(LoxError::interpreter(
-                &expr.operator,
-                "Operands must be numbers".to_string(),
+            _ => Err(self.error(
+                expr.span,
+                InterpreterErrorCode::NumberBinaryExprOperandsIncorrectType,
             )),
         }
+    }
+    fn error(&self, span: Span, code: InterpreterErrorCode) -> LoxError {
+        let err = LoxError::Interpreter(InterpreterError { span, code });
+        err.report();
+        err
     }
 }
 
@@ -122,10 +135,13 @@ impl StmtVisitor<()> for Interpreter {
         Ok(())
     }
 
-    fn visit_function_stmt(&self,stmt: &FunctionStmt) -> Result<(),LoxError>  {
+    fn visit_function_stmt(&self, stmt: &FunctionStmt) -> Result<(), LoxError> {
         let f = LoxFunction::new(stmt, self.environment.borrow().deref());
 
-        self.environment.borrow().borrow_mut().define(&stmt.name.as_string(), Value::Func(Rc::new(f)));
+        self.environment
+            .borrow()
+            .borrow_mut()
+            .define(&stmt.name.as_string(), Value::Func(Rc::new(f)));
         Ok(())
     }
 }
@@ -133,11 +149,19 @@ impl StmtVisitor<()> for Interpreter {
 impl ExprVisitor<Value> for Interpreter {
     fn visit_assign_expr(&self, expr: &AssignExpr) -> Result<Value, LoxError> {
         let value = self.evaluate(&expr.value)?;
-        self.environment
+        if !self
+            .environment
             .borrow()
             .borrow_mut()
-            .assign(&expr.name, value)?;
-        self.environment.borrow().borrow().get(&expr.name)
+            .assign(&expr.name, value)
+        {
+            return Err(self.error(expr.span, InterpreterErrorCode::AssignToUndefinedVar));
+        }
+        self.environment
+            .borrow()
+            .borrow()
+            .get(&expr.name)
+            .ok_or_else(|| self.error(expr.span, InterpreterErrorCode::ReadUndefinedVar))
     }
 
     fn visit_binary_expr(&self, expr: &BinaryExpr) -> Result<Value, LoxError> {
@@ -156,9 +180,9 @@ impl ExprVisitor<Value> for Interpreter {
             TokenType::Plus => match (left, right) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
                 (Value::String(l), Value::String(r)) => Ok(Value::String(format!("{}{}", l, r))),
-                _ => Err(LoxError::interpreter(
-                    &expr.operator,
-                    "Operands must be numbers or strings".to_string(),
+                _ => Err(self.error(
+                    expr.span,
+                    InterpreterErrorCode::PlusExprOperandsIncorrectType,
                 )),
             },
             TokenType::Less => {
@@ -176,10 +200,7 @@ impl ExprVisitor<Value> for Interpreter {
             TokenType::EqualEqual => {
                 self.solve_number_binary(|l, r| Value::Bool(l == r), left, right, expr)
             }
-            _ => Err(LoxError::interpreter(
-                &expr.operator,
-                format!("invalid binary operator {}", expr.operator.ttype),
-            )),
+            _ => Err(self.error(expr.span, InterpreterErrorCode::UnknownBinaryOperator)),
         }
     }
 
@@ -200,36 +221,35 @@ impl ExprVisitor<Value> for Interpreter {
                 Ok(right)
             }
             (TokenType::And, false) | (TokenType::Or, true) => Ok(left),
-            _ => Err(LoxError::interpreter(
-                &expr.operator,
-                "expected AND or OR".to_string(),
-            )),
+            _ => Err(self.error(expr.span, InterpreterErrorCode::UnknownLogicalOperator)),
         }
     }
 
     fn visit_unary_expr(&self, expr: &UnaryExpr) -> Result<Value, LoxError> {
         let right = self.evaluate(&expr.right)?;
+        //LoxError::interpreter(
+        //    &expr.operator,
+        //    format!(
+        //        "cannot use operator {} on type {}",
+        //        expr.operator.ttype, right
+        //    ),
+        //)
         match expr.operator.ttype {
             TokenType::Minus => match right {
                 Value::Number(_) => Ok(-right),
-                _ => Err(LoxError::interpreter(
-                    &expr.operator,
-                    format!(
-                        "cannot use operator {} on type {}",
-                        expr.operator.ttype, right
-                    ),
-                )),
+                _ => Err(self.error(expr.span, InterpreterErrorCode::UnaryMinusInvalidType)),
             },
             TokenType::Bang => Ok(Value::Bool(!Interpreter::is_thruthy(right))),
-            _ => Err(LoxError::interpreter(
-                &expr.operator,
-                format!("invalid unary operator {}", expr.operator.ttype),
-            )),
+            _ => Err(self.error(expr.span, InterpreterErrorCode::UnaryUnknownOperator)),
         }
     }
 
-    fn visit_var_expr(&self, expr: &crate::ast::VarExpr) -> LoxResult<Value> {
-        self.environment.borrow().borrow().get(&expr.name)
+    fn visit_var_expr(&self, expr: &VarExpr) -> LoxResult<Value> {
+        self.environment
+            .borrow()
+            .borrow()
+            .get(&expr.name)
+            .ok_or_else(|| self.error(expr.span, InterpreterErrorCode::ReadUndefinedVar))
     }
 
     fn visit_call_expr(&self, expr: &CallExpr) -> Result<Value, LoxError> {
@@ -243,7 +263,7 @@ impl ExprVisitor<Value> for Interpreter {
 
         match callee {
             Value::Func(f) => f.call(self, args),
-            _ => Ok(Value::Nil)
+            _ => Ok(Value::Nil),
         }
     }
 }
@@ -278,8 +298,18 @@ mod tests {
         )
     }
 
+    fn span() -> Span {
+        Span {
+            start: (0, 0),
+            end: (0, 0),
+        }
+    }
+
     fn literal(value: Value) -> Expr {
-        Expr::Literal(LiteralExpr { value })
+        Expr::Literal(LiteralExpr {
+            value,
+            span: span()
+        })
     }
 
     #[test]
@@ -289,6 +319,7 @@ mod tests {
         let unary_expr = UnaryExpr {
             operator: token(TokenType::Minus),
             right: Rc::new(literal(number(2.0))),
+            span: span(),
         };
         let result = terp.visit_unary_expr(&unary_expr);
         assert!(result.is_ok());
@@ -300,6 +331,7 @@ mod tests {
         let unary_expr = UnaryExpr {
             operator: token(TokenType::Bang),
             right: Rc::new(literal(bool(false))),
+            span: span(),
         };
         let result = terp.visit_unary_expr(&unary_expr);
         assert!(result.is_ok());
@@ -312,17 +344,21 @@ mod tests {
         let var_stmt = VarStmt {
             name: token_literal(TokenType::Identifier, string("hi")),
             initializer: Rc::new(literal(string("hi"))),
+            span: span(),
         };
         let expr = AssignExpr {
             name: token_literal(TokenType::Identifier, string("hi")),
             value: Rc::new(literal(string("hello"))),
+            span: span(),
         };
         let stmt = IfStmt {
             predicate: Rc::new(literal(string("smth"))),
             then_branch: Rc::new(Stmt::Expression(ExpressionStmt {
                 expression: Rc::new(Expr::Assign(expr)),
+                span: span(),
             })),
             else_branch: None,
+            span: span(),
         };
         terp.visit_var_stmt(&var_stmt).expect("Failed to set var");
         let result = terp.visit_if_stmt(&stmt);
@@ -342,10 +378,12 @@ mod tests {
         let stmt = VarStmt {
             name: token_literal(TokenType::Identifier, string("hi")),
             initializer: Rc::new(literal(string("hi"))),
+            span: span(),
         };
         let expr = AssignExpr {
             name: token_literal(TokenType::Identifier, string("hi")),
             value: Rc::new(literal(string("hello"))),
+            span: span(),
         };
         let result = terp.visit_var_stmt(&stmt);
         assert!(result.is_ok());
@@ -358,10 +396,12 @@ mod tests {
         let stmt = Stmt::Var(VarStmt {
             name: token_literal(TokenType::Identifier, string("hi")),
             initializer: Rc::new(literal(init)),
+            span: span(),
         });
         let expr = Expr::Assign(AssignExpr {
             name: token_literal(TokenType::Identifier, string(name)),
             value: Rc::new(literal(value)),
+            span: span(),
         });
 
         (stmt, expr)
@@ -388,6 +428,7 @@ mod tests {
             left: Rc::new(literal(bool(true))),
             operator: token(TokenType::And),
             right: Rc::new(expr),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -412,6 +453,7 @@ mod tests {
             left: Rc::new(literal(bool(false))),
             operator: token(TokenType::And),
             right: Rc::new(expr),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -436,6 +478,7 @@ mod tests {
             left: Rc::new(literal(bool(true))),
             operator: token(TokenType::Or),
             right: Rc::new(expr),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -460,6 +503,7 @@ mod tests {
             left: Rc::new(literal(bool(false))),
             operator: token(TokenType::Or),
             right: Rc::new(expr),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -482,6 +526,7 @@ mod tests {
             left: Rc::new(literal(Value::Nil)),
             operator: token(TokenType::And),
             right: Rc::new(literal(string("hi"))),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -497,6 +542,7 @@ mod tests {
             left: Rc::new(literal(bool(true))),
             operator: token(TokenType::And),
             right: Rc::new(literal(string("hi"))),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -512,6 +558,7 @@ mod tests {
             left: Rc::new(literal(string("hi"))),
             operator: token(TokenType::Or),
             right: Rc::new(literal(bool(false))),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -527,6 +574,7 @@ mod tests {
             left: Rc::new(literal(bool(false))),
             operator: token(TokenType::Or),
             right: Rc::new(literal(string("hi"))),
+            span: span(),
         });
 
         let result = terp.evaluate(&ex);
@@ -544,6 +592,7 @@ mod tests {
         let init_var = Stmt::Var(VarStmt {
             name: var_name.clone(),
             initializer: Rc::new(literal(number(0.0))),
+            span: span(),
         });
 
         let stmt = Stmt::While(WhileStmt {
@@ -551,9 +600,11 @@ mod tests {
             predicate: Rc::new(Expr::Binary(BinaryExpr {
                 left: Rc::new(Expr::Var(VarExpr {
                     name: var_name.clone(),
+                    span: span(),
                 })),
                 operator: token(TokenType::Less),
                 right: Rc::new(literal(number(5.0))),
+                span: span(),
             })),
             body: Rc::new(Stmt::Expression(ExpressionStmt {
                 // count = count + 1
@@ -562,12 +613,17 @@ mod tests {
                     value: Rc::new(Expr::Binary(BinaryExpr {
                         left: Rc::new(Expr::Var(VarExpr {
                             name: var_name.clone(),
+                            span: span(),
                         })),
                         operator: token(TokenType::Plus),
                         right: Rc::new(literal(number(1.0))),
+                        span: span(),
                     })),
+                    span: span(),
                 })),
+                span: span(),
             })),
+            span: span(),
         });
 
         terp.execute(&init_var)

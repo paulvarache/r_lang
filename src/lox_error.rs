@@ -1,6 +1,7 @@
 use std::fmt;
 
-use crate::scanner::token::{Span, Token};
+use crate::scanner::token::Span;
+use crate::scanner::token::Token;
 
 pub type LoxResult<T> = Result<T, LoxError>;
 
@@ -57,7 +58,16 @@ pub enum ParserErrorCode {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum InterpreterErrorCode {}
+pub enum InterpreterErrorCode {
+    NumberBinaryExprOperandsIncorrectType,
+    PlusExprOperandsIncorrectType,
+    UnknownBinaryOperator,
+    UnknownLogicalOperator,
+    UnaryMinusInvalidType,
+    UnaryUnknownOperator,
+    AssignToUndefinedVar,
+    ReadUndefinedVar,
+}
 
 #[derive(Debug)]
 pub enum LoxErrorCode {
@@ -80,7 +90,7 @@ impl fmt::Display for LoxErrorCode {
 pub enum LoxError {
     Scanner(ScannerError),
     Parser(ParserError),
-    Interpreter { token: Token, message: String },
+    Interpreter(InterpreterError),
 }
 
 impl LoxError {
@@ -100,6 +110,11 @@ pub struct ParserError {
     pub token: Token,
     pub next_token: Option<Token>,
     pub code: LoxErrorCode,
+}
+#[derive(Debug)]
+pub struct InterpreterError {
+    pub span: Span,
+    pub code: InterpreterErrorCode,
 }
 
 pub trait Demistify {
@@ -121,9 +136,13 @@ impl fmt::Display for LoxError {
                 writeln!(f, "{}", err.demistify())?;
                 write!(f, "{} | {}", err.token.line, err.token.lexeme.clone())
             }
-            LoxError::Interpreter { token, message } => {
-                writeln!(f, "interpreter error: {}", message)?;
-                write!(f, "{} |", token.line)
+            LoxError::Interpreter(err) => {
+                writeln!(f, "{}", err.demistify())?;
+                write!(
+                    f,
+                    "({},{}) -> ({}, {}) |",
+                    err.span.start.0, err.span.start.1, err.span.end.0, err.span.end.1
+                )
             }
         }
     }

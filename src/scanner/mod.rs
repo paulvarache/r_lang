@@ -150,7 +150,7 @@ impl<'a> Scanner<'a> {
     pub fn error(&mut self, code: ScannerErrorCode) -> LoxError {
         let next_c = self.peek();
         match self.last {
-            Some(last) => self.report_error(next_c, code),
+            Some(_) => self.report_error(next_c, code),
             None => self.report_error(next_c, code),
         }
     }
@@ -232,7 +232,6 @@ impl<'a> Scanner<'a> {
         Token::new(ttype, self.consume(), 0, self.span(), None)
     }
     fn get_token_literal(&mut self, ttype: TokenType, literal: Value) -> Token {
-        let span = Span::new(self.position.0, self.position.1, self.line, self.col);
         Token::new(ttype, self.consume(), 0, self.span(), Some(literal))
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
@@ -282,7 +281,7 @@ impl<'a> Scanner<'a> {
             }
         }
         let s = self.consume();
-        match s.clone().parse::<f64>() {
+        match s.parse::<f64>() {
             Err(_) => Err(self.error(ScannerErrorCode::NumberParsingError)),
             Ok(n) => Ok(Some(self.get_token_literal(TokenType::Number, Value::Number(n)))),
         }

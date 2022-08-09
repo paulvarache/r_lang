@@ -5,7 +5,7 @@ use crate::lox_error::Demistify;
 use super::token_type::TokenType;
 use super::value::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Span {
     pub start: (usize, usize),
     pub end: (usize, usize),
@@ -14,6 +14,10 @@ pub struct Span {
 impl Span {
     pub fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
         Self { start: (start_line, start_col), end: (end_line, end_col) }
+    }
+
+    pub(crate) fn new_from_range(start: Span, end: Span) -> Span {
+        Self { start: start.start.clone(), end: end.end.clone() }
     }
 }
 

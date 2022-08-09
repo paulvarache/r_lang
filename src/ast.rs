@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::lox_error::LoxError;
 use crate::scanner::token::Token;
+use crate::scanner::token::Span;
 use crate::scanner::value::Value;
 
 define_ast!(Expr(
@@ -132,7 +133,7 @@ impl StmtVisitor<String> for AstPrinter {
         ))
     }
 
-    fn visit_function_stmt(&self,stmt: &FunctionStmt) -> Result<String,LoxError>  {
+    fn visit_function_stmt(&self,_stmt: &FunctionStmt) -> Result<String,LoxError>  {
         todo!()
     }
 }

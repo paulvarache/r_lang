@@ -7,6 +7,7 @@ use crate::lox_error::LoxErrorCode;
 use crate::lox_error::LoxResult;
 use crate::lox_error::ParserError;
 use crate::lox_error::ParserErrorCode;
+use crate::scanner::token::Span;
 use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
@@ -17,7 +18,7 @@ impl ParserError {
         self.next_token
             .clone()
             .map(|next_token| format!(", got {}", next_token.demistify()))
-            .unwrap_or("".to_string())
+            .unwrap_or_else(|| "".to_string())
     }
 }
 
@@ -153,8 +154,7 @@ impl Demistify for ParserError {
                 }
                 ParserErrorCode::MissingOpenBraceAfterFunctionDefinition => {
                     "MissingOpenBraceAfterFunctionDefinition".to_string()
-                }
-                // c => format!("missing error demistifyer for {}", c as u32),
+                } // c => format!("missing error demistifyer for {}", c as u32),
             },
             _ => "".to_string(),
         }
@@ -180,10 +180,10 @@ impl<'a> Parser<'a> {
     //              | "fun" func_declaration
     //              | statement
     pub fn declaration(&mut self) -> Result<Option<Stmt>, LoxError> {
-        let r = if self.is_match(&[TokenType::Fun])?.is_some() {
-            self.fun_declaration()
-        } else if self.is_match(&[TokenType::Var])?.is_some() {
-            self.var_declaration()
+        let r = if let Some(fun_token) = self.is_match(&[TokenType::Fun])? {
+            Ok(Some(self.fun_declaration(&fun_token)?))
+        } else if let Some(var_token) = self.is_match(&[TokenType::Var])? {
+            Ok(Some(self.var_declaration(&var_token)?))
         } else {
             self.statement()
         };
@@ -199,30 +199,33 @@ impl<'a> Parser<'a> {
     }
 
     // var_delaration -> IDENTIFIER ( "=" expression )? ";"
-    fn var_declaration(&mut self) -> Result<Option<Stmt>, LoxError> {
+    // TODO tests
+    fn var_declaration(&mut self, var_token: &Token) -> Result<Stmt, LoxError> {
         let name = self
             .is_match(&[TokenType::Identifier])?
             .ok_or_else(|| self.error(ParserErrorCode::MissingIdentifierAfterVarKeyword))?;
-        let mut initializer = Expr::Literal(LiteralExpr { value: Value::Nil });
-        if self.is_match(&[TokenType::Equal])?.is_some() {
-            initializer = self
-                .expression()?
-                .ok_or_else(|| self.error(ParserErrorCode::MissingExpressionAfterVarEqual))?;
-        }
 
-        self.consume(
+        let initializer = match self.is_match(&[TokenType::Equal])? {
+            Some(_) => self
+                .expression()?
+                .ok_or_else(|| self.error(ParserErrorCode::MissingExpressionAfterVarEqual))?,
+            None => Expr::new_literal(Value::Nil, name.span),
+        };
+
+        let token = self.consume(
             TokenType::Semicolon,
             ParserErrorCode::MissingSemicolonOrEqualAfterVarDeclaration,
         )?;
 
-        Ok(Some(Stmt::Var(VarStmt {
+        Ok(Stmt::new_var(
             name,
-            initializer: Rc::new(initializer),
-        })))
+            Rc::new(initializer),
+            Span::new_from_range(var_token.span, token.span),
+        ))
     }
 
     // fun_declaration -> IDENTIFIER "(" parameters? ")" block;
-    fn fun_declaration(&mut self) -> LoxResult<Option<Stmt>> {
+    fn fun_declaration(&mut self, fun_token: &Token) -> LoxResult<Stmt> {
         let name = self.consume(
             TokenType::Identifier,
             ParserErrorCode::MissingIdentifierAfterFunKeyword,
@@ -260,7 +263,12 @@ impl<'a> Parser<'a> {
 
         let body = self.block()?;
 
-        Ok(Some(Stmt::new_function(name, Rc::new(params), Rc::new(body))))
+        Ok(Stmt::new_function(
+            name,
+            Rc::new(params),
+            Rc::new(body),
+            Span::new_from_range(fun_token.span, fun_token.span), // TODO get end span of block
+        ))
     }
 
     // statement -> exprStmt
@@ -270,46 +278,52 @@ impl<'a> Parser<'a> {
     //            | forStmt
     //            | block
     pub fn statement(&mut self) -> Result<Option<Stmt>, LoxError> {
-        match self.peek()? {
-            Some(token) => match token.ttype {
+        if let Some(token) = self.peek()? {
+            return Ok(match token.ttype {
                 TokenType::If => {
                     self.skip()?;
-                    self.if_statement()
+                    Some(self.if_statement(&token)?)
                 }
                 TokenType::Print => {
                     self.skip()?;
-                    self.print_statement()
+                    Some(self.print_statement(&token)?)
                 }
                 TokenType::While => {
                     self.skip()?;
-                    self.while_statement()
+                    Some(self.while_statement(&token)?)
                 }
                 TokenType::For => {
                     self.skip()?;
-                    self.for_statement()
+                    Some(self.for_statement(&token)?)
                 }
                 TokenType::OpenBrace => {
                     self.skip()?;
-                    Ok(Some(Stmt::new_block(Rc::new(self.block()?))))
+                    Some(Stmt::new_block(
+                        Rc::new(self.block()?),
+                        Span::new_from_range(token.span, token.span), // TODO hande block better
+                    ))
                 }
-                _ => self.expression_statement(),
-            },
-            None => Ok(None),
+                _ => self.expression_statement()?,
+            });
         }
+        Ok(None)
     }
 
     // printStmt -> "print" expression
-    fn print_statement(&mut self) -> LoxResult<Option<Stmt>> {
+    fn print_statement(&mut self, print_token: &Token) -> LoxResult<Stmt> {
         let expr = self
             .expression()?
             .ok_or_else(|| self.error(ParserErrorCode::MissingExpressionAfterPrintKeyword))?;
-        self.consume(
+        let semicolon = self.consume(
             TokenType::Semicolon,
             ParserErrorCode::MissingSemicolonAfterPrintStatement,
         )?;
-        Ok(Some(Stmt::new_print(Rc::new(expr))))
+        Ok(Stmt::new_print(
+            Rc::new(expr),
+            Span::new_from_range(print_token.span, semicolon.span),
+        ))
     }
-    fn if_statement(&mut self) -> LoxResult<Option<Stmt>> {
+    fn if_statement(&mut self, if_token: &Token) -> LoxResult<Stmt> {
         self.consume(
             TokenType::OpenParen,
             ParserErrorCode::MissingOpenParenAfterIfKeyword,
@@ -326,19 +340,23 @@ impl<'a> Parser<'a> {
             .statement()?
             .ok_or_else(|| self.error(ParserErrorCode::MissingStatementAfterIf))?;
         let mut else_branch = None;
+        let mut end_span = then_branch.span();
         if self.is_match(&[TokenType::Else])?.is_some() {
-            else_branch = Some(
-                self.statement()?
-                    .ok_or_else(|| self.error(ParserErrorCode::MissingStatementAfterElse))?,
-            );
+            let b = self
+                .statement()?
+                .ok_or_else(|| self.error(ParserErrorCode::MissingStatementAfterElse))?;
+            end_span = b.span();
+            else_branch = Some(b);
         }
-        Ok(Some(Stmt::new_if(
+        let span = Span::new_from_range(if_token.span, end_span);
+        Ok(Stmt::new_if(
             Rc::new(predicate),
             Rc::new(then_branch),
             else_branch.map(Rc::new),
-        )))
+            span,
+        ))
     }
-    fn while_statement(&mut self) -> LoxResult<Option<Stmt>> {
+    fn while_statement(&mut self, while_token: &Token) -> LoxResult<Stmt> {
         self.consume(
             TokenType::OpenParen,
             ParserErrorCode::MissingOpenParenAfterWhileKeyword,
@@ -356,23 +374,27 @@ impl<'a> Parser<'a> {
             .statement()?
             .ok_or_else(|| self.error(ParserErrorCode::MissingStatementAfterWhile))?;
 
-        Ok(Some(Stmt::new_while(Rc::new(predicate), Rc::new(body))))
+        let span = Span::new_from_range(while_token.span, body.span());
+
+        Ok(Stmt::new_while(Rc::new(predicate), Rc::new(body), span))
     }
-    fn for_statement(&mut self) -> LoxResult<Option<Stmt>> {
-        self.consume(
+    fn for_statement(&mut self, for_token: &Token) -> LoxResult<Stmt> {
+        let open_paren = self.consume(
             TokenType::OpenParen,
             ParserErrorCode::MissingOpenParenAfterForKeyword,
         )?;
         let initializer = match self.is_match(&[TokenType::Semicolon, TokenType::Var])? {
             Some(token) if matches!(token.ttype, TokenType::Semicolon) => None,
-            Some(token) if matches!(token.ttype, TokenType::Var) => self.var_declaration()?,
+            Some(token) if matches!(token.ttype, TokenType::Var) => {
+                Some(self.var_declaration(&token)?)
+            }
             _ => self.expression_statement()?,
         };
         let predicate = match self.peek()? {
             Some(token) if matches!(token.ttype, TokenType::Semicolon) => None,
             _ => self.expression()?,
         }
-        .unwrap_or(Expr::new_literal(Value::Bool(true)));
+        .unwrap_or_else(|| Expr::new_literal(Value::Bool(true), open_paren.span));
 
         self.consume(
             TokenType::Semicolon,
@@ -392,23 +414,44 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.error(ParserErrorCode::MissingForBody))?;
 
         if let Some(increment) = increment {
-            body = Stmt::new_block(Rc::new(vec![Rc::new(body), Rc::new(Stmt::new_expression(Rc::new(increment)))]));
+            let span = increment.span();
+            let body_span = body.span();
+            body = Stmt::new_block(
+                Rc::new(vec![
+                    Rc::new(body),
+                    Rc::new(Stmt::new_expression(Rc::new(increment), span)),
+                ]),
+                Span::new_from_range(body_span, span),
+            );
         }
-        body = Stmt::new_while(Rc::new(predicate), Rc::new(body));
+        let body_span = body.span();
+        let predicate_span = predicate.span();
+        body = Stmt::new_while(
+            Rc::new(predicate),
+            Rc::new(body),
+            Span::new_from_range(predicate_span, body_span),
+        );
         if let Some(initializer) = initializer {
-            body = Stmt::new_block(Rc::new(vec![Rc::new(initializer), Rc::new(body)]));
+            let span = initializer.span();
+            let body_span = body.span();
+            body = Stmt::new_block(
+                Rc::new(vec![Rc::new(initializer), Rc::new(body)]),
+                Span::new_from_range(span, body_span),
+            );
         }
-        Ok(Some(body))
+        Ok(body)
     }
     // exprStmt -> expression ';'
     fn expression_statement(&mut self) -> Result<Option<Stmt>, LoxError> {
         match self.expression()? {
-            Some(expr) => self
-                .consume(
+            Some(expr) => {
+                let span = expr.span();
+                self.consume(
                     TokenType::Semicolon,
                     ParserErrorCode::MissingSemicolonAfterExpressionStatement,
                 )
-                .and(Ok(Some(Stmt::new_expression(Rc::new(expr))))),
+                .and(Ok(Some(Stmt::new_expression(Rc::new(expr), span))))
+            }
 
             None => Ok(None),
         }
@@ -438,7 +481,12 @@ impl<'a> Parser<'a> {
                     .assignment()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedAssignment))?;
                 if let Expr::Var(v) = expr {
-                    return Ok(Some(Expr::new_assign(v.name.clone(), Rc::new(value))));
+                    let span = value.span();
+                    return Ok(Some(Expr::new_assign(
+                        v.name.clone(),
+                        Rc::new(value),
+                        Span::new_from_range(v.name.span, span),
+                    )));
                 }
                 return Err(self.error(ParserErrorCode::InvalidAssignmentTarget));
             }
@@ -454,7 +502,8 @@ impl<'a> Parser<'a> {
                 let right = self
                     .logic_or()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedLogicalOr))?;
-                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right));
+                let span = Span::new_from_range(expr.span(), right.span());
+                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right), span);
             }
             return Ok(Some(expr));
         }
@@ -467,7 +516,8 @@ impl<'a> Parser<'a> {
                 let right = self
                     .equality()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedLogicalAnd))?;
-                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right));
+                let span = Span::new_from_range(expr.span(), right.span());
+                expr = Expr::new_logical(Rc::new(expr), operator, Rc::new(right), span);
             }
             return Ok(Some(expr));
         }
@@ -489,7 +539,8 @@ impl<'a> Parser<'a> {
                     let right = self
                         .comparison()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingEqualityRightHandSide))?;
-                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right))
+                    let span = Span::new_from_range(expr.span(), right.span());
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right), span)
                 }
                 Ok(Some(expr))
             }
@@ -509,7 +560,8 @@ impl<'a> Parser<'a> {
                     let right = self.term()?.ok_or_else(|| {
                         self.error(ParserErrorCode::MissingComparisonRightHandSide)
                     })?;
-                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
+                    let span = Span::new_from_range(expr.span(), right.span());
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right), span);
                 }
                 Ok(Some(expr))
             }
@@ -524,7 +576,8 @@ impl<'a> Parser<'a> {
                     let right = self
                         .factor()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingTermRightHandSide))?;
-                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
+                    let span = Span::new_from_range(expr.span(), right.span());
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right), span);
                 }
                 Ok(Some(expr))
             }
@@ -539,7 +592,8 @@ impl<'a> Parser<'a> {
                     let right = self
                         .unary()?
                         .ok_or_else(|| self.error(ParserErrorCode::MissingFactorRightHandSide))?;
-                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right));
+                    let span = Span::new_from_range(expr.span(), right.span());
+                    expr = Expr::new_binary(Rc::new(expr), operator, Rc::new(right), span);
                 }
                 Ok(Some(expr))
             }
@@ -552,7 +606,8 @@ impl<'a> Parser<'a> {
             let right = self
                 .term()?
                 .ok_or_else(|| self.error(ParserErrorCode::MissingUnaryRightHandSide))?;
-            return Ok(Some(Expr::new_unary(operator, Rc::new(right))));
+            let span = Span::new_from_range(operator.span.clone(), right.span());
+            return Ok(Some(Expr::new_unary(operator, Rc::new(right), span)));
         }
         self.call()
     }
@@ -577,7 +632,7 @@ impl<'a> Parser<'a> {
         let next_is_close_paren = self
             .peek()?
             // token -> token type is close paren
-            .and_then(|token| Some(matches!(token.ttype, TokenType::CloseParen)))
+            .map(|token| matches!(token.ttype, TokenType::CloseParen))
             // None -> false
             .unwrap_or(false);
         // Read arguments if there is no close paren in sight
@@ -597,11 +652,12 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        self.consume(
+        let token = self.consume(
             TokenType::CloseParen,
             ParserErrorCode::MissingClosingParenAfterArgumentList,
         )?;
-        Ok(Expr::new_call(Rc::new(callee), Rc::new(arguments)))
+        let span = Span::new_from_range(callee.span(), token.span);
+        Ok(Expr::new_call(Rc::new(callee), Rc::new(arguments), span))
     }
     // primary -> NUMBER | STRING | true | false | nil | '(' expression ')' | IDENTIFIER
     fn primary(&mut self) -> Result<Option<Expr>, LoxError> {
@@ -609,20 +665,21 @@ impl<'a> Parser<'a> {
             Some(token) => match token.ttype {
                 TokenType::False => {
                     self.skip()?;
-                    Ok(Some(Expr::new_literal(Value::Bool(false))))
+                    Ok(Some(Expr::new_literal(Value::Bool(false), token.span)))
                 }
                 TokenType::True => {
                     self.skip()?;
-                    Ok(Some(Expr::new_literal(Value::Bool(true))))
+                    Ok(Some(Expr::new_literal(Value::Bool(true), token.span)))
                 }
                 TokenType::Nil => {
                     self.skip()?;
-                    Ok(Some(Expr::new_literal(Value::Nil)))
+                    Ok(Some(Expr::new_literal(Value::Nil, token.span)))
                 }
                 TokenType::Number => {
                     self.skip()?;
                     Ok(Some(Expr::new_literal(
-                        token.literal.unwrap_or(Value::Number(0.0).clone()),
+                        token.literal.unwrap_or(Value::Number(0.0)),
+                        token.span,
                     )))
                 }
                 TokenType::String => {
@@ -630,7 +687,8 @@ impl<'a> Parser<'a> {
                     Ok(Some(Expr::new_literal(
                         token
                             .literal
-                            .unwrap_or(Value::String("".to_string()).clone()),
+                            .unwrap_or_else(|| Value::String("".to_string())),
+                        token.span,
                     )))
                 }
                 TokenType::OpenParen => {
@@ -639,15 +697,18 @@ impl<'a> Parser<'a> {
                         .expression()?
                         .ok_or_else(|| self.error(ParserErrorCode::UnterminatedGroup))?;
 
-                    self.consume(
+                    let close = self.consume(
                         TokenType::CloseParen,
                         ParserErrorCode::MissingClosingParenAfterGroup,
                     )?;
-                    Ok(Some(Expr::new_grouping(Rc::new(expr))))
+                    Ok(Some(Expr::new_grouping(
+                        Rc::new(expr),
+                        Span::new_from_range(token.span, close.span),
+                    )))
                 }
                 TokenType::Identifier => {
                     self.skip()?;
-                    Ok(Some(Expr::new_var(token.clone())))
+                    Ok(Some(Expr::new_var(token.clone(), token.span)))
                 }
                 TokenType::Eof => Ok(None),
                 _ => Err(self.error(ParserErrorCode::UnexpectedTokenInExpression)),
@@ -772,8 +833,6 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use crate::{
         ast::{CallExpr, Expr, LiteralExpr, Stmt, VarExpr},
         lox_error::{LoxResult, ParserErrorCode},
@@ -840,6 +899,13 @@ mod tests {
         parser.expression()
     }
 
+    fn span() -> Span {
+        Span {
+            start: (0, 0),
+            end: (0, 0),
+        }
+    }
+
     #[test]
     fn primary_false() {
         let result = test_parse_expr(vec![token(TokenType::False)]);
@@ -850,7 +916,8 @@ mod tests {
         assert!(matches!(
             expr,
             Expr::Literal(LiteralExpr {
-                value: Value::Bool(false)
+                value: Value::Bool(false),
+                span
             })
         ))
     }
@@ -865,7 +932,8 @@ mod tests {
         assert!(matches!(
             expr,
             Expr::Literal(LiteralExpr {
-                value: Value::Bool(true)
+                value: Value::Bool(true),
+                span
             })
         ))
     }
@@ -880,6 +948,7 @@ mod tests {
         match expr {
             Expr::Literal(LiteralExpr {
                 value: Value::Number(n),
+                span,
             }) if n == 9.0 => assert!(true),
             _ => assert!(false),
         }
@@ -898,6 +967,7 @@ mod tests {
         match expr {
             Expr::Literal(LiteralExpr {
                 value: Value::String(s),
+                span,
             }) if s == String::from("hi") => assert!(true),
             _ => assert!(false),
         }
@@ -912,7 +982,10 @@ mod tests {
 
         assert!(matches!(
             expr,
-            Expr::Literal(LiteralExpr { value: Value::Nil })
+            Expr::Literal(LiteralExpr {
+                value: Value::Nil,
+                span,
+            })
         ))
     }
 
@@ -927,7 +1000,7 @@ mod tests {
         let expr = result.expect("Unexpected fail").unwrap();
 
         match expr {
-            Expr::Var(VarExpr { name: t })
+            Expr::Var(VarExpr { name: t, span })
                 if t.literal == Some(Value::String(String::from("ident"))) =>
             {
                 assert!(true)
@@ -1116,8 +1189,13 @@ mod tests {
 
         let expr = result.expect("").expect("");
 
-        if let Expr::Call(CallExpr { callee, arguments }) = expr {
-            if let Expr::Var(VarExpr { name }) = &*callee.clone() {
+        if let Expr::Call(CallExpr {
+            callee,
+            arguments,
+            span,
+        }) = expr
+        {
+            if let Expr::Var(VarExpr { name, span }) = &*callee.clone() {
                 if let Some(Value::String(s)) = &name.literal {
                     assert_eq!(s, "my_fn");
                 } else {
@@ -1148,6 +1226,7 @@ mod tests {
         if let Expr::Call(CallExpr {
             callee: _,
             arguments,
+            span,
         }) = expr
         {
             assert_eq!(arguments.len(), 1);
