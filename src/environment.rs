@@ -1,13 +1,12 @@
-use std::{
-    cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
-    rc::Rc,
-};
+use std::borrow::Borrow;
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::fmt;
+use std::rc::Rc;
 
-use crate::{
-    lox_error::{LoxError, LoxResult},
-    scanner::{token::Token, value::Value},
-};
+use crate::scanner::token::Token;
+use crate::scanner::value::Value;
 
 type Link = Option<Rc<RefCell<Environment>>>;
 
@@ -37,7 +36,7 @@ impl Environment {
         if let Some(value) = self.values.get(&name.as_string()) {
             Some(value.clone())
         } else if let Some(enclosing) = &self.enclosing {
-            enclosing.borrow().get(name)
+            enclosing.as_ref().borrow().get(name)
         } else {
             None
         }
@@ -54,6 +53,20 @@ impl Environment {
     }
 }
 
+impl fmt::Display for Environment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.values.iter().try_for_each(|(name, value)| writeln!(f, "> {} => {}", name, value))?;
+        if let Some(enc) = &self.enclosing {
+            writeln!(f, ">  |")?;
+            writeln!(f, ">  v")?;
+            let t = enc.as_ref().borrow();
+            writeln!(f, ">  {}", t)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, rc::Rc};
@@ -65,7 +78,7 @@ mod tests {
     use crate::scanner::value::Value;
 
     fn token_lex(ttype: TokenType, lexeme: &str) -> Token {
-        Token::new(ttype, lexeme.to_string(), 0, Span::new(0,0,0,0), None)
+        Token::new(ttype, lexeme.to_string(), Span::new(0, 0, 0, 0), None)
     }
 
     #[test]

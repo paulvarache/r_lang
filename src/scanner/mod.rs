@@ -2,27 +2,38 @@ pub mod token;
 pub mod token_type;
 pub mod value;
 
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io;
 
-use crate::{
-    lox_error::{Demistify, LoxError, LoxErrorCode, LoxResult, ScannerError, ScannerErrorCode},
-    scanner::value::Value,
-};
+use crate::lox_error::Demistify;
+use crate::lox_error::LoxError;
+use crate::lox_error::LoxErrorCode;
+use crate::lox_error::LoxResult;
+use crate::lox_error::ScannerError;
+use crate::lox_error::ScannerErrorCode;
+use crate::scanner::value::Value;
 
-use self::{
-    token::{Span, Token},
-    token_type::TokenType,
-};
+use self::token::Span;
+use self::token::Token;
+use self::token_type::TokenType;
 
 impl Demistify for ScannerError {
     fn demistify(&self) -> String {
         match self.code {
             LoxErrorCode::Scanner(code) => match code {
                 ScannerErrorCode::NumberParsingError => {
-                    format!("could not parse number at '({}, {}) -> ({}, {})'", self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1)
+                    format!(
+                        "could not parse number at '({}, {}) -> ({}, {})'",
+                        self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1
+                    )
                 }
                 ScannerErrorCode::UnterminatedString => {
-                    format!("unterminated string at '({}, {}) -> ({}, {})'", self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1)
+                    format!(
+                        "unterminated string at '({}, {}) -> ({}, {})'",
+                        self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1
+                    )
                 }
                 ScannerErrorCode::Unknown => "".to_string(),
             },
@@ -32,7 +43,6 @@ impl Demistify for ScannerError {
 }
 
 pub trait Scan {
-    fn line(&self) -> usize;
     fn span(&self) -> Span;
     fn next(&mut self) -> LoxResult<Option<Token>>;
 }
@@ -61,9 +71,6 @@ fn is_alpha_numeric(c: u8) -> bool {
 }
 
 impl<'a> Scan for Scanner<'a> {
-    fn line(&self) -> usize {
-        self.line
-    }
     fn span(&self) -> Span {
         Span::new(self.position.0, self.position.1, self.line, self.col)
     }
@@ -229,10 +236,16 @@ impl<'a> Scanner<'a> {
         self.get_token(tok)
     }
     fn get_token(&mut self, ttype: TokenType) -> Token {
-        Token::new(ttype, self.consume(), 0, self.span(), None)
+        Token::new(ttype, self.consume(), self.span(), None)
     }
-    fn get_token_literal(&mut self, ttype: TokenType, literal: Value) -> Token {
-        Token::new(ttype, self.consume(), 0, self.span(), Some(literal))
+    fn get_token_literal(
+        &mut self,
+        ttype: TokenType,
+        lexeme: String,
+        span: Span,
+        literal: Value,
+    ) -> Token {
+        Token::new(ttype, lexeme, span, Some(literal))
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
         loop {
@@ -249,10 +262,15 @@ impl<'a> Scanner<'a> {
                 }
                 _ => {
                     self.advance(); // Eat the closing "
-
+                    let span = self.span();
                     let s: String = String::from_utf8(self.buffer[1..self.cursor - 1].to_vec())
                         .expect("Failed to parse utf-8");
-                    return Ok(Some(self.get_token_literal(TokenType::String, Value::String(s))))
+                    return Ok(Some(self.get_token_literal(
+                        TokenType::String,
+                        s.clone(),
+                        span,
+                        Value::String(s),
+                    )));
                 }
             }
         }
@@ -280,10 +298,16 @@ impl<'a> Scanner<'a> {
                 _ => break,
             }
         }
+        let span = self.span();
         let s = self.consume();
         match s.parse::<f64>() {
             Err(_) => Err(self.error(ScannerErrorCode::NumberParsingError)),
-            Ok(n) => Ok(Some(self.get_token_literal(TokenType::Number, Value::Number(n)))),
+            Ok(n) => Ok(Some(self.get_token_literal(
+                TokenType::Number,
+                s,
+                span,
+                Value::Number(n),
+            ))),
         }
     }
     fn get_identifier(&mut self) -> Result<Option<Token>, LoxError> {
@@ -297,12 +321,13 @@ impl<'a> Scanner<'a> {
                 }
             }
         }
+        let span = self.span();
         let lexeme = self.consume();
         let ttype = self
             .get_keyword_token_type(&lexeme)
             .unwrap_or(TokenType::Identifier);
 
-        Ok(Some(self.get_token(ttype)))
+        Ok(Some(Token::new(ttype, lexeme, span, None)))
     }
     fn skip_comment(&mut self) {
         loop {

@@ -3,7 +3,6 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::lox_error::Demistify;
 use crate::lox_error::LoxError;
-use crate::lox_error::LoxErrorCode;
 use crate::lox_error::LoxResult;
 use crate::lox_error::ParserError;
 use crate::lox_error::ParserErrorCode;
@@ -25,138 +24,131 @@ impl ParserError {
 impl Demistify for ParserError {
     fn demistify(&self) -> String {
         match self.code {
-            LoxErrorCode::Parser(code) => match code {
-                ParserErrorCode::None => "None".to_string(),
-                ParserErrorCode::MissingIdentifierAfterVarKeyword => {
+            ParserErrorCode::None => "None".to_string(),
+            ParserErrorCode::MissingIdentifierAfterVarKeyword => {
+                format!(
+                    "expected identifier after 'var'{}",
+                    self.demistify_next_token()
+                )
+            }
+            ParserErrorCode::MissingExpressionAfterVarEqual => {
+                format!(
+                    "expected expression after '='{}",
+                    self.demistify_next_token()
+                )
+            }
+            ParserErrorCode::MissingSemicolonOrEqualAfterVarDeclaration => {
+                if matches!(self.token.ttype, TokenType::Identifier) {
                     format!(
-                        "expected identifier after 'var'{}",
+                        "expected ';' or '=' after variable declaration{}",
+                        self.demistify_next_token()
+                    )
+                } else {
+                    format!(
+                        "expected ';' after variable declaration{}",
                         self.demistify_next_token()
                     )
                 }
-                ParserErrorCode::MissingExpressionAfterVarEqual => {
-                    format!(
-                        "expected expression after '='{}",
-                        self.demistify_next_token()
-                    )
-                }
-                ParserErrorCode::MissingSemicolonOrEqualAfterVarDeclaration => {
-                    if matches!(self.token.ttype, TokenType::Identifier) {
-                        format!(
-                            "expected ';' or '=' after variable declaration{}",
-                            self.demistify_next_token()
-                        )
-                    } else {
-                        format!(
-                            "expected ';' after variable declaration{}",
-                            self.demistify_next_token()
-                        )
-                    }
-                }
-                ParserErrorCode::MissingExpressionAfterPrintKeyword => {
-                    format!(
-                        "expected expression after 'print' keyword{}",
-                        self.demistify_next_token()
-                    )
-                }
-                ParserErrorCode::MissingSemicolonAfterPrintStatement => {
-                    format!(
-                        "expected ';' after {}{}",
-                        self.token.demistify(),
-                        self.demistify_next_token()
-                    )
-                }
-                ParserErrorCode::MissingSemicolonAfterExpressionStatement => {
-                    format!(
-                        "expected ';' after {}{}",
-                        self.token.demistify(),
-                        self.demistify_next_token()
-                    )
-                }
-                ParserErrorCode::MissingOpenParenAfterIfKeyword => {
-                    format!("expected '(' after if{}", self.demistify_next_token())
-                }
-                ParserErrorCode::UnterminatedIfPredicate => "UnterminatedIfPredicate".to_string(),
-                ParserErrorCode::MissingClosingParenAfterIfPredicate => {
-                    "MissingClosingParenAfterIfPredicate".to_string()
-                }
-                ParserErrorCode::MissingStatementAfterIf => "MissingStatementAfterIf".to_string(),
-                ParserErrorCode::MissingStatementAfterElse => {
-                    "MissingStatementAfterElse".to_string()
-                }
-                ParserErrorCode::MissingOpenParenAfterWhileKeyword => {
-                    "MissingOpenParenAfterWhileKeyword".to_string()
-                }
-                ParserErrorCode::UnterminatedWhilePredicate => {
-                    "UnterminatedWhilePredicate".to_string()
-                }
-                ParserErrorCode::MissingClosingParenAfterWhilePredicate => {
-                    "MissingClosingParenAfterWhilePredicate".to_string()
-                }
-                ParserErrorCode::MissingStatementAfterWhile => {
-                    "MissingStatementAfterWhile".to_string()
-                }
-                ParserErrorCode::MissingOpenParenAfterForKeyword => {
-                    "MissingOpenParenAfterForKeyword".to_string()
-                }
-                ParserErrorCode::MissingSemicolonAfterForIteration => {
-                    "MissingSemicolonAfterForIteration".to_string()
-                }
-                ParserErrorCode::MissingClosingParenAfterFor => {
-                    "MissingClosingParenAfterFor".to_string()
-                }
-                ParserErrorCode::MissingForBody => "MissingForBody".to_string(),
-                ParserErrorCode::UnterminatedBlock => "UnterminatedBlock".to_string(),
-                ParserErrorCode::UnterminatedAssignment => "UnterminatedAssignment".to_string(),
-                ParserErrorCode::InvalidAssignmentTarget => "InvalidAssignmentTarget".to_string(),
-                ParserErrorCode::UnterminatedLogicalOr => "UnterminatedLogicalOr".to_string(),
-                ParserErrorCode::UnterminatedLogicalAnd => "UnterminatedLogicalAnd".to_string(),
-                ParserErrorCode::MissingEqualityRightHandSide => {
-                    "MissingEqualityRightHandSide".to_string()
-                }
-                ParserErrorCode::MissingComparisonRightHandSide => {
-                    "MissingComparisonRightHandSide".to_string()
-                }
-                ParserErrorCode::MissingTermRightHandSide => "MissingTermRightHandSide".to_string(),
-                ParserErrorCode::MissingFactorRightHandSide => {
-                    "MissingFactorRightHandSide".to_string()
-                }
-                ParserErrorCode::MissingUnaryRightHandSide => {
-                    "MissingUnaryRightHandSide".to_string()
-                }
-                ParserErrorCode::MissingClosingParenAfterArgumentList => {
-                    "MissingClosingParenAfterArgumentList".to_string()
-                }
-                ParserErrorCode::UnterminatedArgumentList => "UnterminatedArgumentList".to_string(),
-                ParserErrorCode::UnterminatedGroup => "UnterminatedGroup".to_string(),
-                ParserErrorCode::MissingClosingParenAfterGroup => {
-                    "MissingClosingParenAfterGroup".to_string()
-                }
-                ParserErrorCode::UnexpectedTokenInExpression => {
-                    "UnexpectedTokenInExpression".to_string()
-                }
-                ParserErrorCode::FunctionCallToManyArguments => {
-                    "too many arguments passed to function".to_string()
-                }
-                ParserErrorCode::MissingIdentifierAfterFunKeyword => {
-                    "MissingIdentifierAfterFunKeyword".to_string()
-                }
-                ParserErrorCode::MissingOpenParenAfterFunIdentifier => {
-                    "MissingOpenParenAfterFunIdentifier".to_string()
-                }
-                ParserErrorCode::MissingParameterNameInFunDefinition => {
-                    "MissingParameterNameInFunDefinition".to_string()
-                }
-                ParserErrorCode::FunctionDefinitionToManyArguments => {
-                    "FunctionDefinitionToManyArguments".to_string()
-                }
-                ParserErrorCode::MissingCommaAfterFunctionParameterName => {
-                    "MissingCommaAfterFunctionParameterName".to_string()
-                }
-                ParserErrorCode::MissingOpenBraceAfterFunctionDefinition => {
-                    "MissingOpenBraceAfterFunctionDefinition".to_string()
-                } // c => format!("missing error demistifyer for {}", c as u32),
-            },
-            _ => "".to_string(),
+            }
+            ParserErrorCode::MissingExpressionAfterPrintKeyword => {
+                format!(
+                    "expected expression after 'print' keyword{}",
+                    self.demistify_next_token()
+                )
+            }
+            ParserErrorCode::MissingSemicolonAfterPrintStatement => {
+                format!(
+                    "expected ';' after {}{}",
+                    self.token.demistify(),
+                    self.demistify_next_token()
+                )
+            }
+            ParserErrorCode::MissingSemicolonAfterExpressionStatement => {
+                format!(
+                    "expected ';' after {}{}",
+                    self.token.demistify(),
+                    self.demistify_next_token()
+                )
+            }
+            ParserErrorCode::MissingOpenParenAfterIfKeyword => {
+                format!("expected '(' after if{}", self.demistify_next_token())
+            }
+            ParserErrorCode::UnterminatedIfPredicate => "UnterminatedIfPredicate".to_string(),
+            ParserErrorCode::MissingClosingParenAfterIfPredicate => {
+                "MissingClosingParenAfterIfPredicate".to_string()
+            }
+            ParserErrorCode::MissingStatementAfterIf => "MissingStatementAfterIf".to_string(),
+            ParserErrorCode::MissingStatementAfterElse => "MissingStatementAfterElse".to_string(),
+            ParserErrorCode::MissingOpenParenAfterWhileKeyword => {
+                "MissingOpenParenAfterWhileKeyword".to_string()
+            }
+            ParserErrorCode::UnterminatedWhilePredicate => "UnterminatedWhilePredicate".to_string(),
+            ParserErrorCode::MissingClosingParenAfterWhilePredicate => {
+                "MissingClosingParenAfterWhilePredicate".to_string()
+            }
+            ParserErrorCode::MissingStatementAfterWhile => "MissingStatementAfterWhile".to_string(),
+            ParserErrorCode::MissingOpenParenAfterForKeyword => {
+                "MissingOpenParenAfterForKeyword".to_string()
+            }
+            ParserErrorCode::MissingSemicolonAfterForIteration => {
+                "MissingSemicolonAfterForIteration".to_string()
+            }
+            ParserErrorCode::MissingClosingParenAfterFor => {
+                "MissingClosingParenAfterFor".to_string()
+            }
+            ParserErrorCode::MissingForBody => "MissingForBody".to_string(),
+            ParserErrorCode::UnterminatedBlock => "UnterminatedBlock".to_string(),
+            ParserErrorCode::UnterminatedAssignment => "UnterminatedAssignment".to_string(),
+            ParserErrorCode::InvalidAssignmentTarget => "InvalidAssignmentTarget".to_string(),
+            ParserErrorCode::UnterminatedLogicalOr => "UnterminatedLogicalOr".to_string(),
+            ParserErrorCode::UnterminatedLogicalAnd => "UnterminatedLogicalAnd".to_string(),
+            ParserErrorCode::MissingEqualityRightHandSide => {
+                "MissingEqualityRightHandSide".to_string()
+            }
+            ParserErrorCode::MissingComparisonRightHandSide => {
+                "MissingComparisonRightHandSide".to_string()
+            }
+            ParserErrorCode::MissingTermRightHandSide => "MissingTermRightHandSide".to_string(),
+            ParserErrorCode::MissingFactorRightHandSide => "MissingFactorRightHandSide".to_string(),
+            ParserErrorCode::MissingUnaryRightHandSide => "MissingUnaryRightHandSide".to_string(),
+            ParserErrorCode::MissingClosingParenAfterArgumentList => {
+                "MissingClosingParenAfterArgumentList".to_string()
+            }
+            ParserErrorCode::UnterminatedArgumentList => "UnterminatedArgumentList".to_string(),
+            ParserErrorCode::UnterminatedGroup => "UnterminatedGroup".to_string(),
+            ParserErrorCode::MissingClosingParenAfterGroup => {
+                "MissingClosingParenAfterGroup".to_string()
+            }
+            ParserErrorCode::UnexpectedTokenInExpression => {
+                "UnexpectedTokenInExpression".to_string()
+            }
+            ParserErrorCode::FunctionCallToManyArguments => {
+                "too many arguments passed to function".to_string()
+            }
+            ParserErrorCode::MissingIdentifierAfterFunKeyword => {
+                "MissingIdentifierAfterFunKeyword".to_string()
+            }
+            ParserErrorCode::MissingOpenParenAfterFunIdentifier => {
+                "MissingOpenParenAfterFunIdentifier".to_string()
+            }
+            ParserErrorCode::MissingParameterNameInFunDefinition => {
+                "MissingParameterNameInFunDefinition".to_string()
+            }
+            ParserErrorCode::FunctionDefinitionToManyArguments => {
+                "FunctionDefinitionToManyArguments".to_string()
+            }
+            ParserErrorCode::MissingCommaAfterFunctionParameterName => {
+                "MissingCommaAfterFunctionParameterName".to_string()
+            }
+            ParserErrorCode::MissingOpenBraceAfterFunctionDefinition => {
+                "MissingOpenBraceAfterFunctionDefinition".to_string()
+            }
+            ParserErrorCode::MissingExpressionAfterReturnKeyword => {
+                "MissingExpressionAfterReturnKeyword".to_string()
+            }
+            ParserErrorCode::MissingSemicolonAfterReturnStatement => {
+                "MissingSemicolonAfterReturnStatement".to_string()
+            } // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }
@@ -253,6 +245,8 @@ impl<'a> Parser<'a> {
                     TokenType::Comma,
                     ParserErrorCode::MissingCommaAfterFunctionParameterName,
                 )?;
+            } else {
+                break;
             }
         }
 
@@ -274,6 +268,7 @@ impl<'a> Parser<'a> {
     // statement -> exprStmt
     //            | ifStmt
     //            | printStmt
+    //            | returnStmt
     //            | whileStmt
     //            | forStmt
     //            | block
@@ -287,6 +282,10 @@ impl<'a> Parser<'a> {
                 TokenType::Print => {
                     self.skip()?;
                     Some(self.print_statement(&token)?)
+                }
+                TokenType::Return => {
+                    self.skip()?;
+                    Some(self.return_statement(&token)?)
                 }
                 TokenType::While => {
                     self.skip()?;
@@ -323,6 +322,32 @@ impl<'a> Parser<'a> {
             Span::new_from_range(print_token.span, semicolon.span),
         ))
     }
+
+    fn return_statement(&mut self, return_token: &Token) -> LoxResult<Stmt> {
+        let mut expr = None;
+
+        let mut end_span = return_token.span;
+
+        if let Some(semicolon) = self.is_match(&[TokenType::Semicolon])? {
+            end_span = semicolon.span;
+        } else {
+            expr =
+                Some(self.expression()?.ok_or_else(|| {
+                    self.error(ParserErrorCode::MissingExpressionAfterReturnKeyword)
+                })?);
+            let semicolon = self.consume(
+                TokenType::Semicolon,
+                ParserErrorCode::MissingSemicolonAfterReturnStatement,
+            )?;
+            end_span = semicolon.span;
+        }
+
+        Ok(Stmt::new_return(
+            expr.map(|e| Rc::new(e)),
+            Span::new_from_range(return_token.span, end_span),
+        ))
+    }
+
     fn if_statement(&mut self, if_token: &Token) -> LoxResult<Stmt> {
         self.consume(
             TokenType::OpenParen,
@@ -803,16 +828,10 @@ impl<'a> Parser<'a> {
         match &self.last {
             Some(token) => self.report_error(token, &next, code),
             None => self.report_error(
-                &Token::new(
-                    TokenType::Eof,
-                    "".to_string(),
-                    self.scanner.line(),
-                    self.scanner.span(),
-                    None,
-                ),
+                &Token::new(TokenType::Eof, "".to_string(), self.scanner.span(), None),
                 &None,
                 code,
-            ), //todo code
+            ),
         }
     }
     fn report_error(
@@ -824,7 +843,7 @@ impl<'a> Parser<'a> {
         let err = LoxError::Parser(ParserError {
             token: token.clone(),
             next_token: next_token.clone(),
-            code: LoxErrorCode::Parser(code),
+            code,
         });
         err.report();
         err
@@ -833,16 +852,18 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        ast::{CallExpr, Expr, LiteralExpr, Stmt, VarExpr},
-        lox_error::{LoxResult, ParserErrorCode},
-        scanner::{
-            token::{Span, Token},
-            token_type::TokenType,
-            value::Value,
-            Scan,
-        },
-    };
+    use crate::ast::CallExpr;
+    use crate::ast::Expr;
+    use crate::ast::LiteralExpr;
+    use crate::ast::Stmt;
+    use crate::ast::VarExpr;
+    use crate::lox_error::LoxResult;
+    use crate::lox_error::ParserErrorCode;
+    use crate::scanner::token::Span;
+    use crate::scanner::token::Token;
+    use crate::scanner::token_type::TokenType;
+    use crate::scanner::value::Value;
+    use crate::scanner::Scan;
 
     use super::Parser;
 
@@ -857,10 +878,6 @@ mod tests {
     }
 
     impl Scan for TestScanner {
-        fn line(&self) -> usize {
-            999
-        }
-
         fn span(&self) -> Span {
             Span::new(0, 0, 0, 0)
         }
@@ -874,16 +891,10 @@ mod tests {
     }
 
     fn token(ttype: TokenType) -> Token {
-        Token::new(ttype, format!(""), 999, Span::new(0, 0, 0, 0), None)
+        Token::new(ttype, format!(""), Span::new(0, 0, 0, 0), None)
     }
     fn token_literal(ttype: TokenType, literal: Value) -> Token {
-        Token::new(
-            ttype,
-            format!(""),
-            999,
-            Span::new(0, 0, 0, 0),
-            Some(literal),
-        )
+        Token::new(ttype, format!(""), Span::new(0, 0, 0, 0), Some(literal))
     }
 
     fn test_parse_stmt(tokens: Vec<Token>) -> LoxResult<Option<Stmt>> {

@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::scanner::token::Span;
 use crate::scanner::token::Token;
+use crate::scanner::value::Value;
 
 pub type LoxResult<T> = Result<T, LoxError>;
 
@@ -55,6 +56,8 @@ pub enum ParserErrorCode {
     FunctionDefinitionToManyArguments,
     MissingCommaAfterFunctionParameterName,
     MissingOpenBraceAfterFunctionDefinition,
+    MissingExpressionAfterReturnKeyword,
+    MissingSemicolonAfterReturnStatement,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -67,6 +70,8 @@ pub enum InterpreterErrorCode {
     UnaryUnknownOperator,
     AssignToUndefinedVar,
     ReadUndefinedVar,
+    NotAFunction,
+    FunctionArityMismatch,
 }
 
 #[derive(Debug)]
@@ -91,6 +96,7 @@ pub enum LoxError {
     Scanner(ScannerError),
     Parser(ParserError),
     Interpreter(InterpreterError),
+    Return(Value),
 }
 
 impl LoxError {
@@ -109,7 +115,7 @@ pub struct ScannerError {
 pub struct ParserError {
     pub token: Token,
     pub next_token: Option<Token>,
-    pub code: LoxErrorCode,
+    pub code: ParserErrorCode,
 }
 #[derive(Debug)]
 pub struct InterpreterError {
@@ -124,6 +130,7 @@ pub trait Demistify {
 impl fmt::Display for LoxError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            LoxError::Return(_) => Ok(()),
             LoxError::Scanner(err) => {
                 writeln!(f, "{}", err.demistify())?;
                 write!(
@@ -134,7 +141,7 @@ impl fmt::Display for LoxError {
             }
             LoxError::Parser(err) => {
                 writeln!(f, "{}", err.demistify())?;
-                write!(f, "{} | {}", err.token.line, err.token.lexeme.clone())
+                write!(f, "{} | {}", err.token.span.start.0, err.token.lexeme.clone())
             }
             LoxError::Interpreter(err) => {
                 writeln!(f, "{}", err.demistify())?;

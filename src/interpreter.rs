@@ -1,8 +1,9 @@
+use std::cell::RefCell;
 use std::ops::Deref;
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use crate::ast::*;
-use crate::callable::LoxCallable;
+use crate::callable::Callable;
 use crate::environment::*;
 use crate::function::LoxFunction;
 use crate::lox_error::*;
@@ -25,6 +26,8 @@ impl Demistify for InterpreterError {
             InterpreterErrorCode::UnaryUnknownOperator => "UnaryUnknownOperator".to_string(),
             InterpreterErrorCode::AssignToUndefinedVar => "AssignToUndefinedVar".to_string(),
             InterpreterErrorCode::ReadUndefinedVar => "ReadUndefinedVar".to_string(),
+            InterpreterErrorCode::NotAFunction => "NotAFunction".to_string(),
+            InterpreterErrorCode::FunctionArityMismatch => "FunctionArityMismatch".to_string(),
         }
     }
 }
@@ -47,12 +50,10 @@ impl Interpreter {
     pub fn evaluate(&self, expr: &Expr) -> Result<Value, LoxError> {
         expr.accept(self)
     }
-    fn execute_block(&self, statements: &Rc<Vec<Rc<Stmt>>>, e: Environment) -> LoxResult<()> {
+    pub fn execute_block(&self, statements: &Rc<Vec<Rc<Stmt>>>, e: Environment) -> LoxResult<()> {
         let previous = self.environment.replace(Rc::new(RefCell::new(e)));
 
-        let result = statements
-            .iter()
-            .try_for_each(|statement| self.execute(statement));
+        let result = statements.iter().try_for_each(|s| self.execute(&s.clone()));
 
         self.environment.replace(previous);
 
@@ -137,12 +138,21 @@ impl StmtVisitor<()> for Interpreter {
 
     fn visit_function_stmt(&self, stmt: &FunctionStmt) -> Result<(), LoxError> {
         let f = LoxFunction::new(stmt, self.environment.borrow().deref());
+        let c = Callable { func: Rc::new(f) };
 
         self.environment
             .borrow()
             .borrow_mut()
-            .define(&stmt.name.as_string(), Value::Func(Rc::new(f)));
+            .define(&stmt.name.as_string(), Value::Func(Rc::new(c)));
         Ok(())
+    }
+
+    fn visit_return_stmt(&self, stmt: &ReturnStmt) -> Result<(), LoxError> {
+        let value = stmt
+            .expression
+            .as_ref()
+            .map_or(Ok(Value::Nil), |expr| self.evaluate(&expr))?;
+        Err(LoxError::Return(value))
     }
 }
 
@@ -255,16 +265,21 @@ impl ExprVisitor<Value> for Interpreter {
     fn visit_call_expr(&self, expr: &CallExpr) -> Result<Value, LoxError> {
         let callee = self.evaluate(&expr.callee)?;
 
-        let mut args = Vec::new();
+        if let Value::Func(callable) = callee {
+            let args = expr
+                .arguments
+                .iter()
+                .map(|a| self.evaluate(a))
+                .collect::<LoxResult<Vec<Value>>>()?;
 
-        for a in expr.arguments.iter() {
-            args.push(self.evaluate(a)?);
+            if args.len() != callable.func.arity() {
+                return Err(self.error(expr.span, InterpreterErrorCode::FunctionArityMismatch));
+            }
+            callable.func.call(self, args)
+        } else {
+            Err(self.error(expr.callee.span(), InterpreterErrorCode::NotAFunction))
         }
 
-        match callee {
-            Value::Func(f) => f.call(self, args),
-            _ => Ok(Value::Nil),
-        }
     }
 }
 
@@ -285,17 +300,11 @@ mod tests {
     }
 
     fn token(ttype: TokenType) -> Token {
-        Token::new(ttype, "".to_string(), 0, Span::new(0, 0, 0, 0), None)
+        Token::new(ttype, "".to_string(), Span::new(0, 0, 0, 0), None)
     }
 
     fn token_literal(ttype: TokenType, literal: Value) -> Token {
-        Token::new(
-            ttype,
-            "".to_string(),
-            0,
-            Span::new(0, 0, 0, 0),
-            Some(literal),
-        )
+        Token::new(ttype, "".to_string(), Span::new(0, 0, 0, 0), Some(literal))
     }
 
     fn span() -> Span {
@@ -308,7 +317,7 @@ mod tests {
     fn literal(value: Value) -> Expr {
         Expr::Literal(LiteralExpr {
             value,
-            span: span()
+            span: span(),
         })
     }
 

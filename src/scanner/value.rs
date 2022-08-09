@@ -1,13 +1,13 @@
 use std::{fmt, ops, cmp::{self, Ordering}, rc::Rc};
 
-use crate::function::LoxFunction;
+use crate::{function::LoxFunction, callable::{LoxCallable, Callable}};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     String(String),
     Number(f64),
     Bool(bool),
-    Func(Rc<LoxFunction>),
+    Func(Rc<Callable>),
     Nil,
 }
 

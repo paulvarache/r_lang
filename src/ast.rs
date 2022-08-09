@@ -23,6 +23,7 @@ define_ast!(Stmt(
     Function: {name: Token, params: Vec<Token>, body: Vec<Stmt> },
     If: { predicate: Expr, then_branch: Stmt, else_branch: Option<Stmt> },
     Print: { expression: Expr },
+    Return: { expression: Option<Expr> },
     Var: { name: Token, initializer: Expr },
     While: { predicate: Expr, body: Stmt },
 ));
@@ -104,6 +105,10 @@ impl StmtVisitor<String> for AstPrinter {
         stmt.expression.accept(self)
     }
 
+    fn visit_function_stmt(&self,_stmt: &FunctionStmt) -> Result<String,LoxError>  {
+        todo!()
+    }
+
     fn visit_if_stmt(&self, stmt: &IfStmt) -> Result<String, LoxError> {
         let predicate = stmt.predicate.accept(self)?;
         let then = stmt.then_branch.accept(self)?;
@@ -133,7 +138,7 @@ impl StmtVisitor<String> for AstPrinter {
         ))
     }
 
-    fn visit_function_stmt(&self,_stmt: &FunctionStmt) -> Result<String,LoxError>  {
+    fn visit_return_stmt(&self,stmt: &ReturnStmt) -> Result<String,LoxError>  {
         todo!()
     }
 }

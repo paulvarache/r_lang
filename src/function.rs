@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::f32::consts::E;
 use std::rc::Rc;
 
 use crate::ast::FunctionStmt;
@@ -6,6 +7,7 @@ use crate::ast::Stmt;
 use crate::callable::LoxCallable;
 use crate::environment::Environment;
 use crate::interpreter::Interpreter;
+use crate::lox_error::LoxError;
 use crate::lox_error::LoxResult;
 use crate::scanner::token::Span;
 use crate::scanner::token::Token;
@@ -41,23 +43,20 @@ impl LoxFunction {
 
 impl LoxCallable for LoxFunction {
     fn call(&self, interpreter: &Interpreter, args: Vec<Value>) -> LoxResult<Value> {
+        let mut e = Environment::new_with_enclosing(Rc::clone(&self.closure));
         for (name, value) in self.params.iter().zip(args.iter()) {
-            self.closure
-                .borrow_mut()
-                .define(&name.as_string(), value.clone());
+            e.define(&name.as_string(), value.clone());
         }
-        let start = self
-            .body
-            .get(0)
-            .map(|stmt| stmt.span())
-            .unwrap_or(Span::new(0, 0, 0, 0));
-        let end = self
-            .body
-            .last()
-            .map(|stmt| stmt.span())
-            .unwrap_or(Span::new(0, 0, 0, 0));
-        let span = Span::new_from_range(start, end);
-        interpreter.execute(&Stmt::new_block(Rc::clone(&self.body), span))?;
-        Ok(Value::Nil)
+        let result = interpreter.execute_block(&self.body, e);
+        match result {
+            Err(LoxError::Return(value)) => {
+                Ok(value)
+            },
+            Err(e) => Err(e),
+            Ok(_) => Ok(Value::Nil)
+        }
+    }
+    fn arity(&self) -> usize {
+        self.params.len()
     }
 }

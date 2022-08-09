@@ -16,6 +16,7 @@ mod scanner;
 mod native;
 mod callable;
 mod function;
+mod resolver;
 
 use parser::Parser;
 use stringreader::StringReader;
