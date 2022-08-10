@@ -7,6 +7,7 @@ use crate::callable::Callable;
 use crate::environment::*;
 use crate::function::LoxFunction;
 use crate::lox_error::*;
+use crate::native::DateNative;
 use crate::scanner::token::Span;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
@@ -39,9 +40,16 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new() -> Self {
+        let e = RefCell::new(Rc::new(RefCell::new(Environment::new())));
+        e.borrow().borrow_mut().define(
+            "date",
+            Value::Func(Rc::new(Callable {
+                func: Rc::new(DateNative {}),
+            })),
+        );
         Self {
             globals: Rc::new(RefCell::new(Environment::new())),
-            environment: RefCell::new(Rc::new(RefCell::new(Environment::new()))),
+            environment: e,
         }
     }
     pub fn execute(&self, stmt: &Stmt) -> Result<(), LoxError> {
@@ -121,7 +129,10 @@ impl StmtVisitor<()> for Interpreter {
     }
 
     fn visit_var_stmt(&self, stmt: &crate::ast::VarStmt) -> Result<(), LoxError> {
-        let value = self.evaluate(&stmt.initializer)?;
+        let value = stmt
+            .initializer
+            .as_ref()
+            .map_or(Ok(Value::Nil), |init| self.evaluate(&init))?;
         self.environment
             .borrow()
             .borrow_mut()
@@ -279,7 +290,6 @@ impl ExprVisitor<Value> for Interpreter {
         } else {
             Err(self.error(expr.callee.span(), InterpreterErrorCode::NotAFunction))
         }
-
     }
 }
 
@@ -315,34 +325,31 @@ mod tests {
     }
 
     fn literal(value: Value) -> Expr {
-        Expr::Literal(LiteralExpr {
-            value,
-            span: span(),
-        })
+        Expr::new_literal(value, span())
     }
 
     #[test]
     fn test_unary_minus() {
         let terp = Interpreter::new();
 
-        let unary_expr = UnaryExpr {
-            operator: token(TokenType::Minus),
-            right: Rc::new(literal(number(2.0))),
-            span: span(),
-        };
-        let result = terp.visit_unary_expr(&unary_expr);
+        let unary_expr = Expr::new_unary(
+            token(TokenType::Minus),
+            Rc::new(literal(number(2.0))),
+            span(),
+        );
+        let result = terp.evaluate(&unary_expr);
         assert!(result.is_ok());
         assert_eq!(result.ok(), Some(Value::Number(-2.0)));
     }
     #[test]
     fn test_unary_not() {
         let terp = Interpreter::new();
-        let unary_expr = UnaryExpr {
-            operator: token(TokenType::Bang),
-            right: Rc::new(literal(bool(false))),
-            span: span(),
-        };
-        let result = terp.visit_unary_expr(&unary_expr);
+        let unary_expr = Expr::new_unary(
+            token(TokenType::Bang),
+            Rc::new(literal(bool(false))),
+            span(),
+        );
+        let result = terp.evaluate(&unary_expr);
         assert!(result.is_ok());
         assert_eq!(result.ok(), Some(Value::Bool(true)));
     }
@@ -350,27 +357,24 @@ mod tests {
     #[test]
     fn if_then() {
         let terp = Interpreter::new();
-        let var_stmt = VarStmt {
-            name: token_literal(TokenType::Identifier, string("hi")),
-            initializer: Rc::new(literal(string("hi"))),
-            span: span(),
-        };
-        let expr = AssignExpr {
-            name: token_literal(TokenType::Identifier, string("hi")),
-            value: Rc::new(literal(string("hello"))),
-            span: span(),
-        };
-        let stmt = IfStmt {
-            predicate: Rc::new(literal(string("smth"))),
-            then_branch: Rc::new(Stmt::Expression(ExpressionStmt {
-                expression: Rc::new(Expr::Assign(expr)),
-                span: span(),
-            })),
-            else_branch: None,
-            span: span(),
-        };
-        terp.visit_var_stmt(&var_stmt).expect("Failed to set var");
-        let result = terp.visit_if_stmt(&stmt);
+        let var_stmt = Stmt::new_var(
+            token_literal(TokenType::Identifier, string("hi")),
+            Some(Rc::new(literal(string("hi")))),
+            span(),
+        );
+        let expr = Expr::new_assign(
+            token_literal(TokenType::Identifier, string("hi")),
+            Rc::new(literal(string("hello"))),
+            span(),
+        );
+        let stmt = Stmt::new_if(
+            Rc::new(literal(string("smth"))),
+            Rc::new(Stmt::new_expression(Rc::new(expr), span())),
+            None,
+            span(),
+        );
+        terp.execute(&var_stmt).expect("Failed to set var");
+        let result = terp.execute(&stmt);
         assert!(result.is_ok());
         // Read variable
         let result = terp
@@ -384,34 +388,34 @@ mod tests {
     #[test]
     fn assign() {
         let terp = Interpreter::new();
-        let stmt = VarStmt {
-            name: token_literal(TokenType::Identifier, string("hi")),
-            initializer: Rc::new(literal(string("hi"))),
-            span: span(),
-        };
-        let expr = AssignExpr {
-            name: token_literal(TokenType::Identifier, string("hi")),
-            value: Rc::new(literal(string("hello"))),
-            span: span(),
-        };
-        let result = terp.visit_var_stmt(&stmt);
+        let stmt = Stmt::new_var(
+            token_literal(TokenType::Identifier, string("hi")),
+            Some(Rc::new(literal(string("hi")))),
+            span(),
+        );
+        let expr = Expr::new_assign(
+            token_literal(TokenType::Identifier, string("hi")),
+            Rc::new(literal(string("hello"))),
+            span(),
+        );
+        let result = terp.execute(&stmt);
         assert!(result.is_ok());
-        let result = terp.visit_assign_expr(&expr);
+        let result = terp.evaluate(&expr);
         assert!(result.is_ok());
         assert_eq!(result.expect("hi"), Value::String("hello".to_string()))
     }
 
     fn set_var(name: &str, init: Value, value: Value) -> (Stmt, Expr) {
-        let stmt = Stmt::Var(VarStmt {
-            name: token_literal(TokenType::Identifier, string("hi")),
-            initializer: Rc::new(literal(init)),
-            span: span(),
-        });
-        let expr = Expr::Assign(AssignExpr {
-            name: token_literal(TokenType::Identifier, string(name)),
-            value: Rc::new(literal(value)),
-            span: span(),
-        });
+        let stmt = Stmt::new_var(
+            token_literal(TokenType::Identifier, string("hi")),
+            Some(Rc::new(literal(init))),
+            span(),
+        );
+        let expr = Expr::new_assign(
+            token_literal(TokenType::Identifier, string(name)),
+            Rc::new(literal(value)),
+            span(),
+        );
 
         (stmt, expr)
     }
@@ -433,12 +437,12 @@ mod tests {
         terp.execute(&stmt)
             .expect("Could not initialize checker var");
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(true))),
-            operator: token(TokenType::And),
-            right: Rc::new(expr),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(true))),
+            token(TokenType::And),
+            Rc::new(expr),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -458,12 +462,12 @@ mod tests {
         terp.execute(&stmt)
             .expect("Could not initialize checker var");
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(false))),
-            operator: token(TokenType::And),
-            right: Rc::new(expr),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(false))),
+            token(TokenType::And),
+            Rc::new(expr),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -483,12 +487,12 @@ mod tests {
         terp.execute(&stmt)
             .expect("Could not initialize checker var");
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(true))),
-            operator: token(TokenType::Or),
-            right: Rc::new(expr),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(true))),
+            token(TokenType::Or),
+            Rc::new(expr),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -508,12 +512,12 @@ mod tests {
         terp.execute(&stmt)
             .expect("Could not initialize checker var");
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(false))),
-            operator: token(TokenType::Or),
-            right: Rc::new(expr),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(false))),
+            token(TokenType::Or),
+            Rc::new(expr),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -531,12 +535,12 @@ mod tests {
     fn logical_and_left_type() {
         let terp = Interpreter::new();
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(Value::Nil)),
-            operator: token(TokenType::And),
-            right: Rc::new(literal(string("hi"))),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(Value::Nil)),
+            token(TokenType::And),
+            Rc::new(literal(string("hi"))),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -547,12 +551,12 @@ mod tests {
     fn logical_and_right_type() {
         let terp = Interpreter::new();
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(true))),
-            operator: token(TokenType::And),
-            right: Rc::new(literal(string("hi"))),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(true))),
+            token(TokenType::And),
+            Rc::new(literal(string("hi"))),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -563,12 +567,12 @@ mod tests {
     fn logical_or_left_type() {
         let terp = Interpreter::new();
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(string("hi"))),
-            operator: token(TokenType::Or),
-            right: Rc::new(literal(bool(false))),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(string("hi"))),
+            token(TokenType::Or),
+            Rc::new(literal(bool(false))),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -579,12 +583,12 @@ mod tests {
     fn logical_or_right_type() {
         let terp = Interpreter::new();
 
-        let ex = Expr::Logical(LogicalExpr {
-            left: Rc::new(literal(bool(false))),
-            operator: token(TokenType::Or),
-            right: Rc::new(literal(string("hi"))),
-            span: span(),
-        });
+        let ex = Expr::new_logical(
+            Rc::new(literal(bool(false))),
+            token(TokenType::Or),
+            Rc::new(literal(string("hi"))),
+            span(),
+        );
 
         let result = terp.evaluate(&ex);
 
@@ -598,42 +602,36 @@ mod tests {
 
         let var_name = token_literal(TokenType::Identifier, string("count"));
 
-        let init_var = Stmt::Var(VarStmt {
-            name: var_name.clone(),
-            initializer: Rc::new(literal(number(0.0))),
-            span: span(),
-        });
+        let init_var = Stmt::new_var(
+            var_name.clone(),
+            Some(Rc::new(literal(number(0.0)))),
+            span(),
+        );
 
-        let stmt = Stmt::While(WhileStmt {
+        let stmt = Stmt::new_while(
             // count < 5
-            predicate: Rc::new(Expr::Binary(BinaryExpr {
-                left: Rc::new(Expr::Var(VarExpr {
-                    name: var_name.clone(),
-                    span: span(),
-                })),
-                operator: token(TokenType::Less),
-                right: Rc::new(literal(number(5.0))),
-                span: span(),
-            })),
-            body: Rc::new(Stmt::Expression(ExpressionStmt {
+            Rc::new(Expr::new_binary(
+                Rc::new(Expr::new_var(var_name.clone(), span())),
+                token(TokenType::Less),
+                Rc::new(literal(number(5.0))),
+                span(),
+            )),
+            Rc::new(Stmt::new_expression(
                 // count = count + 1
-                expression: Rc::new(Expr::Assign(AssignExpr {
-                    name: var_name.clone(),
-                    value: Rc::new(Expr::Binary(BinaryExpr {
-                        left: Rc::new(Expr::Var(VarExpr {
-                            name: var_name.clone(),
-                            span: span(),
-                        })),
-                        operator: token(TokenType::Plus),
-                        right: Rc::new(literal(number(1.0))),
-                        span: span(),
-                    })),
-                    span: span(),
-                })),
-                span: span(),
-            })),
-            span: span(),
-        });
+                Rc::new(Expr::new_assign(
+                    var_name.clone(),
+                    Rc::new(Expr::new_binary(
+                        Rc::new(Expr::new_var(var_name.clone(), span())),
+                        token(TokenType::Plus),
+                        Rc::new(literal(number(1.0))),
+                        span(),
+                    )),
+                    span(),
+                )),
+                span(),
+            )),
+            span(),
+        );
 
         terp.execute(&init_var)
             .expect("failed to initalize counter");

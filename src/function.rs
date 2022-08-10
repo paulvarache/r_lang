@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::f32::consts::E;
 use std::rc::Rc;
 
 use crate::ast::FunctionStmt;
@@ -9,7 +8,6 @@ use crate::environment::Environment;
 use crate::interpreter::Interpreter;
 use crate::lox_error::LoxError;
 use crate::lox_error::LoxResult;
-use crate::scanner::token::Span;
 use crate::scanner::token::Token;
 use crate::scanner::value::Value;
 
@@ -49,11 +47,9 @@ impl LoxCallable for LoxFunction {
         }
         let result = interpreter.execute_block(&self.body, e);
         match result {
-            Err(LoxError::Return(value)) => {
-                Ok(value)
-            },
+            Err(LoxError::Return(value)) => Ok(value),
             Err(e) => Err(e),
-            Ok(_) => Ok(Value::Nil)
+            Ok(_) => Ok(Value::Nil),
         }
     }
     fn arity(&self) -> usize {

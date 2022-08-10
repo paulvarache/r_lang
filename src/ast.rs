@@ -1,10 +1,14 @@
 use r_ast::define_ast;
 use std::rc::Rc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use crate::lox_error::LoxError;
 use crate::scanner::token::Token;
 use crate::scanner::token::Span;
 use crate::scanner::value::Value;
+
+static AST_NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 define_ast!(Expr(
     Assign: { name: Token, value: Expr },
@@ -24,7 +28,7 @@ define_ast!(Stmt(
     If: { predicate: Expr, then_branch: Stmt, else_branch: Option<Stmt> },
     Print: { expression: Expr },
     Return: { expression: Option<Expr> },
-    Var: { name: Token, initializer: Expr },
+    Var: { name: Token, initializer: Option<Expr> },
     While: { predicate: Expr, body: Stmt },
 ));
 
@@ -127,7 +131,11 @@ impl StmtVisitor<String> for AstPrinter {
     }
 
     fn visit_var_stmt(&self, stmt: &VarStmt) -> Result<String, LoxError> {
-        self.parenthesize(&"var".to_string(), &[&stmt.initializer])
+        if let Some(init) = &stmt.initializer {
+            self.parenthesize(&"var".to_string(), &[&init])
+        } else {
+            self.parenthesize(&"var".to_string(), &[])
+        }
     }
 
     fn visit_while_stmt(&self, stmt: &WhileStmt) -> Result<String, LoxError> {
@@ -138,7 +146,7 @@ impl StmtVisitor<String> for AstPrinter {
         ))
     }
 
-    fn visit_return_stmt(&self,stmt: &ReturnStmt) -> Result<String,LoxError>  {
+    fn visit_return_stmt(&self,_stmt: &ReturnStmt) -> Result<String,LoxError>  {
         todo!()
     }
 }

@@ -58,6 +58,7 @@ pub enum ParserErrorCode {
     MissingOpenBraceAfterFunctionDefinition,
     MissingExpressionAfterReturnKeyword,
     MissingSemicolonAfterReturnStatement,
+    InitVarWithUnassignedVar,
 }
 
 #[derive(Copy, Clone, Debug)]

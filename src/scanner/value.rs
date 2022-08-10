@@ -1,6 +1,10 @@
-use std::{fmt, ops, cmp::{self, Ordering}, rc::Rc};
+use std::cmp;
+use std::cmp::Ordering;
+use std::fmt;
+use std::ops;
+use std::rc::Rc;
 
-use crate::{function::LoxFunction, callable::{LoxCallable, Callable}};
+use crate::callable::Callable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -152,12 +156,12 @@ mod test {
     #[test]
     fn test_value_gt() {
         assert!(Value::Number(7.) > Value::Number(2.));
-        assert!(!(Value::String("hi".to_string()) > Value::Number(2.))); 
+        assert!(!(Value::String("hi".to_string()) > Value::Number(2.)));
     }
     #[test]
     fn test_value_eq() {
         assert!(Value::Number(7.) == Value::Number(7.));
-        assert!(!(Value::String("hi".to_string()) == Value::Number(2.))); 
-        assert!(Value::String("hi".to_string()) == Value::String("hi".to_string())); 
+        assert!(!(Value::String("hi".to_string()) == Value::Number(2.)));
+        assert!(Value::String("hi".to_string()) == Value::String("hi".to_string()));
     }
 }

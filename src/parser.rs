@@ -148,6 +148,9 @@ impl Demistify for ParserError {
             }
             ParserErrorCode::MissingSemicolonAfterReturnStatement => {
                 "MissingSemicolonAfterReturnStatement".to_string()
+            }
+            ParserErrorCode::InitVarWithUnassignedVar => {
+                "can't read local variable in its own initializer".to_string()
             } // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
@@ -198,10 +201,11 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.error(ParserErrorCode::MissingIdentifierAfterVarKeyword))?;
 
         let initializer = match self.is_match(&[TokenType::Equal])? {
-            Some(_) => self
-                .expression()?
-                .ok_or_else(|| self.error(ParserErrorCode::MissingExpressionAfterVarEqual))?,
-            None => Expr::new_literal(Value::Nil, name.span),
+            Some(_) => Some(
+                self.expression()?
+                    .ok_or_else(|| self.error(ParserErrorCode::MissingExpressionAfterVarEqual))?,
+            ),
+            None => None,
         };
 
         let token = self.consume(
@@ -211,7 +215,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::new_var(
             name,
-            Rc::new(initializer),
+            initializer.map(|init| Rc::new(init)),
             Span::new_from_range(var_token.span, token.span),
         ))
     }
@@ -326,7 +330,7 @@ impl<'a> Parser<'a> {
     fn return_statement(&mut self, return_token: &Token) -> LoxResult<Stmt> {
         let mut expr = None;
 
-        let mut end_span = return_token.span;
+        let end_span;
 
         if let Some(semicolon) = self.is_match(&[TokenType::Semicolon])? {
             end_span = semicolon.span;
@@ -457,11 +461,10 @@ impl<'a> Parser<'a> {
             Span::new_from_range(predicate_span, body_span),
         );
         if let Some(initializer) = initializer {
-            let span = initializer.span();
             let body_span = body.span();
             body = Stmt::new_block(
                 Rc::new(vec![Rc::new(initializer), Rc::new(body)]),
-                Span::new_from_range(span, body_span),
+                Span::new_from_range(for_token.span, body_span),
             );
         }
         Ok(body)
@@ -910,13 +913,6 @@ mod tests {
         parser.expression()
     }
 
-    fn span() -> Span {
-        Span {
-            start: (0, 0),
-            end: (0, 0),
-        }
-    }
-
     #[test]
     fn primary_false() {
         let result = test_parse_expr(vec![token(TokenType::False)]);
@@ -928,7 +924,8 @@ mod tests {
             expr,
             Expr::Literal(LiteralExpr {
                 value: Value::Bool(false),
-                span
+                span: _,
+                id: _,
             })
         ))
     }
@@ -944,7 +941,8 @@ mod tests {
             expr,
             Expr::Literal(LiteralExpr {
                 value: Value::Bool(true),
-                span
+                span: _,
+                id: _,
             })
         ))
     }
@@ -959,7 +957,8 @@ mod tests {
         match expr {
             Expr::Literal(LiteralExpr {
                 value: Value::Number(n),
-                span,
+                span: _,
+                id: _,
             }) if n == 9.0 => assert!(true),
             _ => assert!(false),
         }
@@ -978,7 +977,8 @@ mod tests {
         match expr {
             Expr::Literal(LiteralExpr {
                 value: Value::String(s),
-                span,
+                span: _,
+                id: _,
             }) if s == String::from("hi") => assert!(true),
             _ => assert!(false),
         }
@@ -995,7 +995,8 @@ mod tests {
             expr,
             Expr::Literal(LiteralExpr {
                 value: Value::Nil,
-                span,
+                span: _,
+                id: _,
             })
         ))
     }
@@ -1011,9 +1012,11 @@ mod tests {
         let expr = result.expect("Unexpected fail").unwrap();
 
         match expr {
-            Expr::Var(VarExpr { name: t, span })
-                if t.literal == Some(Value::String(String::from("ident"))) =>
-            {
+            Expr::Var(VarExpr {
+                name: t,
+                span: _,
+                id: _,
+            }) if t.literal == Some(Value::String(String::from("ident"))) => {
                 assert!(true)
             }
             _ => assert!(false),
@@ -1203,10 +1206,16 @@ mod tests {
         if let Expr::Call(CallExpr {
             callee,
             arguments,
-            span,
+            span: _,
+            id: _,
         }) = expr
         {
-            if let Expr::Var(VarExpr { name, span }) = &*callee.clone() {
+            if let Expr::Var(VarExpr {
+                name,
+                span: _,
+                id: _,
+            }) = &*callee.clone()
+            {
                 if let Some(Value::String(s)) = &name.literal {
                     assert_eq!(s, "my_fn");
                 } else {
@@ -1237,7 +1246,8 @@ mod tests {
         if let Expr::Call(CallExpr {
             callee: _,
             arguments,
-            span,
+            span: _,
+            id: _,
         }) = expr
         {
             assert_eq!(arguments.len(), 1);
