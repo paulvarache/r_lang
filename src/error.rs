@@ -93,6 +93,8 @@ pub enum CompilerErrorCode {}
 pub enum RuntimeErrorCode {
     OutOfChunkBounds,
     OutOfConstantsBounds,
+    UnaryMinusInvalidType,
+    NumberBinaryExprOperandsIncorrectType,
 }
 
 #[derive(Debug)]
@@ -140,7 +142,7 @@ pub struct ScannerError {
 #[derive(Debug)]
 pub struct ParserError {
     pub token: Token,
-    pub next_token: Option<Token>,
+    pub next_token: Token,
     pub code: ParserErrorCode,
 }
 #[derive(Debug)]
@@ -171,6 +173,8 @@ impl Demistify for RuntimeError {
         match self.code {
             RuntimeErrorCode::OutOfChunkBounds => todo!(),
             RuntimeErrorCode::OutOfConstantsBounds => todo!(),
+            RuntimeErrorCode::UnaryMinusInvalidType => "'-' operand only accepts numbers".to_string(),
+            RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType => "incompatible types".to_string(),
         }
     }
 }

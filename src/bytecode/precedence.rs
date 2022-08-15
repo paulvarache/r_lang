@@ -1,7 +1,8 @@
 use r_ast::EnumIndex;
 
-#[derive(EnumIndex)]
+#[derive(Default, EnumIndex)]
 pub enum Precedence {
+    #[default]
     None,
     Assignment, // =
     Or,         // or

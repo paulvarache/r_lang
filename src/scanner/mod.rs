@@ -156,11 +156,7 @@ impl<'a> Scan for Scanner<'a> {
                 line.len() + 1
             };
 
-            let start_pad = std::iter::repeat(" ").take(start_col - 1).collect::<String>();
-            let underline = std::iter::repeat("^").take(end_col - start_col).collect::<String>().red();
-            let end_pad = std::iter::repeat(" ").take(line.len() - end_col).collect::<String>();
-
-            let fill = format!("{start_pad}{underline}{end_pad}");
+            let fill = format!("{0:2$}{1:3$}{0:4$}", " ", "^", start_col - 1, end_col - start_col, line.len() - (end_col - 1));
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
             let underline_prefix = format!("{:01$} |", "", max_pad).cyan();

@@ -33,9 +33,18 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant_long(chunk, offset + 1)?;
                 offset + 4
             }
-            OpCode::Negate | OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide => {
-                offset + 1
-            }
+            OpCode::Negate
+            | OpCode::Add
+            | OpCode::Subtract
+            | OpCode::Multiply
+            | OpCode::Divide
+            | OpCode::Not
+            | OpCode::Nil
+            | OpCode::True
+            | OpCode::Equal
+            | OpCode::Greater
+            | OpCode::Less
+            | OpCode::False => offset + 1,
         };
         println!("");
         Ok(new_offset)
@@ -52,7 +61,7 @@ fn print_opcode<T: ToString>(name: T) {
 }
 
 fn print_value(value: Value) {
-    print!("{}", value.to_string().bright_yellow())
+    print!("{}", format!("{:?}", value).bright_yellow())
 }
 
 fn print_constant(chunk: &Chunk, index: usize) -> LoxResult<()> {
@@ -62,12 +71,12 @@ fn print_constant(chunk: &Chunk, index: usize) -> LoxResult<()> {
             addr: index,
         })
     })?;
-    let value = chunk
-        .get_constant(constant_addr as usize)
-        .ok_or_else(|| LoxError::Runtime(RuntimeError {
+    let value = chunk.get_constant(constant_addr as usize).ok_or_else(|| {
+        LoxError::Runtime(RuntimeError {
             code: RuntimeErrorCode::OutOfConstantsBounds,
             addr: index,
-        }))?;
+        })
+    })?;
     print_value(value);
     Ok(())
 }

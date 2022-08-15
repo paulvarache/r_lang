@@ -17,7 +17,7 @@ pub struct VM {
 macro_rules! expr {
     ($e:expr) => {
         $e
-    }
+    };
 }
 
 impl VM {
@@ -28,12 +28,23 @@ impl VM {
         }
     }
     pub fn run(&mut self, chunk: &Chunk) -> LoxResult<()> {
-        macro_rules! binary_op {
+        macro_rules! guard_number_binary_op {
+            () => {{
+                if !matches!(
+                    (self.peek(0), self.peek(1)),
+                    (&Value::Number(_), &Value::Number(_))
+                ) {
+                    return Err(self.error(RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType));
+                }
+            }};
+        }
+        macro_rules! number_binary_op {
             ($op:tt) => {
                 {
+                    guard_number_binary_op!();
                     let right = self.pop();
                     let left = self.pop();
-                    self.push(expr!(left $op right));
+                    self.push(expr!(&left $op &right));
                 }
             };
         }
@@ -53,17 +64,61 @@ impl VM {
                     self.push(value);
                 }
                 OpCode::Return => {
-                    println!("{}", self.pop() );
+                    println!("{:?}", self.pop());
                     break;
                 }
                 OpCode::Negate => {
                     let last_index = self.stack.len() - 1;
-                    self.stack[last_index] = -self.stack[last_index];
-                },
-                OpCode::Add => binary_op!(+),
-                OpCode::Subtract => binary_op!(-),
-                OpCode::Multiply => binary_op!(*),
-                OpCode::Divide => binary_op!(/),
+                    let value = &self.stack[last_index];
+                    if matches!(value, &Value::Number(_)) {
+                        self.stack[last_index] = -value;
+                    } else {
+                        return Err(self.error(RuntimeErrorCode::UnaryMinusInvalidType));
+                    }
+                }
+                OpCode::Add => {
+                    if !matches!(
+                        (self.peek(0), self.peek(1)),
+                        (&Value::Number(_), &Value::Number(_))
+                    ) && !matches!(
+                        (self.peek(0), self.peek(1)),
+                        (&Value::String(_), &Value::String(_))
+                    ) {
+                        return Err(
+                            self.error(RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType)
+                        );
+                    }
+                    let right = self.pop();
+                    let left = self.pop();
+                    self.push(&left + &right);
+                }
+                OpCode::Subtract => number_binary_op!(-),
+                OpCode::Multiply => number_binary_op!(*),
+                OpCode::Divide => number_binary_op!(/),
+                OpCode::Nil => self.push(Value::Nil),
+                OpCode::True => self.push(Value::Bool(true)),
+                OpCode::False => self.push(Value::Bool(false)),
+                OpCode::Not => {
+                    let last_index = self.stack.len() - 1;
+                    self.stack[last_index] = Value::Bool(self.peek(0).is_falsey());
+                }
+                OpCode::Equal => {
+                    let right = self.pop();
+                    let left = self.pop();
+                    self.push(Value::Bool(&left == &right));
+                }
+                OpCode::Greater => {
+                    guard_number_binary_op!();
+                    let right = self.pop();
+                    let left = self.pop();
+                    self.push(Value::Bool(&left > &right));
+                }
+                OpCode::Less => {
+                    guard_number_binary_op!();
+                    let right = self.pop();
+                    let left = self.pop();
+                    self.push(Value::Bool(&left < &right));
+                }
             }
             #[cfg(feature = "debug_trace_execution")]
             {
@@ -78,10 +133,13 @@ impl VM {
     fn pop(&mut self) -> Value {
         self.stack.pop().unwrap() // stacked in a way that this is a legitimate panic if it fails
     }
+    fn peek(&self, n: usize) -> &Value {
+        &self.stack[self.stack.len() - 1 - n]
+    }
     fn print_stack(&self) {
         println!("{:=^32}", "STACK".to_string());
         for value in &self.stack {
-            println!("| [{:<26}] |", value.to_string().bright_yellow());
+            println!("| [{:<26}] |", format!("{:?}", value).bright_yellow());
         }
         println!("{:=^32}", "".to_string());
     }
@@ -99,8 +157,7 @@ impl VM {
             .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
     }
     fn read_constant_long(&mut self, chunk: &Chunk) -> LoxResult<Value> {
-        let constant_addr = chunk
-            .get_constant_long_addr(self.read_byte())?;
+        let constant_addr = chunk.get_constant_long_addr(self.read_byte())?;
         self.ip += 2;
         chunk
             .get_constant(constant_addr as usize)
@@ -109,7 +166,7 @@ impl VM {
     fn error(&self, code: RuntimeErrorCode) -> LoxError {
         LoxError::Runtime(RuntimeError {
             code,
-            addr: self.ip,
+            addr: self.ip - 1,
         })
     }
 }

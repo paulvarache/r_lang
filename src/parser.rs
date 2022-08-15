@@ -14,10 +14,7 @@ use crate::scanner::Scan;
 
 impl ParserError {
     fn demistify_next_token(&self) -> String {
-        self.next_token
-            .clone()
-            .map(|next_token| format!(", got {}", next_token.demistify()))
-            .unwrap_or_else(|| "".to_string())
+        format!(", got {}", self.next_token.demistify())
     }
 }
 
@@ -113,7 +110,7 @@ impl Demistify for ParserError {
             ParserErrorCode::UnterminatedArgumentList => "UnterminatedArgumentList".to_string(),
             ParserErrorCode::UnterminatedGroup => "UnterminatedGroup".to_string(),
             ParserErrorCode::MissingClosingParenAfterGroup => {
-                "MissingClosingParenAfterGroup".to_string()
+                format!("expected ')' to end group{}", self.demistify_next_token())
             }
             ParserErrorCode::UnexpectedTokenInExpression => {
                 format!("{}, {}", "UnexpectedTokenInExpression", self.token)
@@ -155,9 +152,18 @@ impl Demistify for ParserError {
                 "expected property name after '.'{}",
                 self.demistify_next_token()
             ),
-            ParserErrorCode::MissingSuperclassName => format!("expected parent class name after '<'{}", self.demistify_next_token()),
-            ParserErrorCode::MissingDotAfterSuperKeyword => format!("expected '.' after super keyword{}", self.demistify_next_token()),
-            ParserErrorCode::MissingIdentiferAfterSuperDot => format!("expected identifier after super.{}", self.demistify_next_token()), // c => format!("missing error demistifyer for {}", c as u32),
+            ParserErrorCode::MissingSuperclassName => format!(
+                "expected parent class name after '<'{}",
+                self.demistify_next_token()
+            ),
+            ParserErrorCode::MissingDotAfterSuperKeyword => format!(
+                "expected '.' after super keyword{}",
+                self.demistify_next_token()
+            ),
+            ParserErrorCode::MissingIdentiferAfterSuperDot => format!(
+                "expected identifier after super.{}",
+                self.demistify_next_token()
+            ), // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }
@@ -291,8 +297,14 @@ impl<'a> Parser<'a> {
         let mut superclass = None;
 
         if let Some(_) = self.is_match(&[TokenType::Less])? {
-            let superclass_name = self.consume(TokenType::Identifier, ParserErrorCode::MissingSuperclassName)?;
-            superclass = Some(Rc::new(VarExpr::new(superclass_name.clone(), superclass_name.span)));
+            let superclass_name = self.consume(
+                TokenType::Identifier,
+                ParserErrorCode::MissingSuperclassName,
+            )?;
+            superclass = Some(Rc::new(VarExpr::new(
+                superclass_name.clone(),
+                superclass_name.span,
+            )));
         }
 
         self.consume(
@@ -817,9 +829,15 @@ impl<'a> Parser<'a> {
                 TokenType::Super => {
                     self.skip()?;
                     self.consume(TokenType::Dot, ParserErrorCode::MissingDotAfterSuperKeyword)?;
-                    let name = self.consume(TokenType::Identifier, ParserErrorCode::MissingIdentiferAfterSuperDot)?;
-                    Ok(Some(Expr::new_super(name.clone(), Span::new_from_range(token.span, name.span))))
-                },
+                    let name = self.consume(
+                        TokenType::Identifier,
+                        ParserErrorCode::MissingIdentiferAfterSuperDot,
+                    )?;
+                    Ok(Some(Expr::new_super(
+                        name.clone(),
+                        Span::new_from_range(token.span, name.span),
+                    )))
+                }
                 TokenType::Eof => Ok(None),
                 _ => Err(self.error(ParserErrorCode::UnexpectedTokenInExpression)),
             },
@@ -927,7 +945,7 @@ impl<'a> Parser<'a> {
     ) -> LoxError {
         LoxError::Parser(ParserError {
             token: token.clone(),
-            next_token: next_token.clone(),
+            next_token: next_token.clone().unwrap(), // TODO: This parser should have a way to always have a peeked token
             code,
         })
     }

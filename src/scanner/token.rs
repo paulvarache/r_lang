@@ -6,7 +6,7 @@ use super::span::Span;
 use super::token_type::TokenType;
 use super::value::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Token {
     pub ttype: TokenType,
     pub lexeme: String,

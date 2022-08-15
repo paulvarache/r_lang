@@ -3,11 +3,13 @@ use crate::scanner::span::Span;
 use super::chunk::Chunk;
 use super::opcode::OpCode;
 use super::sourcemap::Sourcemap;
+use super::value::Value;
 
 pub trait Emit {
     fn emit(&mut self, byte: u8, span: Span);
-    fn emit_constant(&mut self, value: f64, span: Span);
+    fn emit_constant(&mut self, value: Value, span: Span);
     fn get_chunk(&self) -> Box<Chunk>;
+    fn locate_byte(&self, addr: usize) -> Option<Span>;
 }
 
 pub struct Emitter {
@@ -34,7 +36,7 @@ impl Emit for Emitter {
         self.write(byte, span);
     }
 
-    fn emit_constant(&mut self, value: f64, span: Span) {
+    fn emit_constant(&mut self, value: Value, span: Span) {
         let const_addr = self.chunk.add_constant(value);
         self.write(OpCode::Constant.into(), span);
         self.write(const_addr, span);
@@ -43,4 +45,7 @@ impl Emit for Emitter {
     fn get_chunk(&self) -> Box<Chunk> {
         Box::clone(&self.chunk)
     }
+    fn locate_byte(&self, addr: usize) -> Option<Span> {
+        self.sourcemaps.locate_byte(addr).map(|s| s.clone())
+    } 
 }

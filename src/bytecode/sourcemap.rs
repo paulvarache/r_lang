@@ -13,7 +13,10 @@ impl Sourcemap {
         }
     }
 
-    pub fn describe_byte(&mut self, byte: usize, span: Span) {
-        self.spans.insert(byte, span);
+    pub fn describe_byte(&mut self, addr: usize, span: Span) {
+        self.spans.insert(addr, span);
+    }
+    pub fn locate_byte(&self, addr: usize) -> Option<&Span> {
+        self.spans.get(&addr)
     }
 }

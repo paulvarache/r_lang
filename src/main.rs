@@ -23,6 +23,7 @@ mod resolver;
 mod scanner;
 
 use bytecode::chunk::Chunk;
+use bytecode::emitter;
 use bytecode::emitter::Emitter;
 use bytecode::sourcemap::Sourcemap;
 use bytecode::vm::VM;
@@ -31,6 +32,8 @@ use colored::Colorize;
 use error::LoxError;
 use parser::Parser;
 use resolver::Resolver;
+use scanner::Scan;
+use scanner::span::Span;
 use stringreader::StringReader;
 
 use crate::interpreter::Interpreter;
@@ -82,6 +85,22 @@ impl Lox {
         print!("Usage: lox <src>");
         process::exit(64);
     }
+    fn report_error(&self, err: LoxError, scanner: &Scanner) {
+        println!("{}: {}", "error".red(), format!("{err}").bright_white());
+        match err {
+            LoxError::Scanner(err) => {
+                println!("{}", scanner.format_error_loc(err.span));
+            }
+            LoxError::Parser(err) => {
+                println!("{}", scanner.format_error_loc(err.next_token.span));
+            }
+            LoxError::Interpreter(err) => {
+                println!("{}", scanner.format_error_loc(err.span));
+            }
+            _ => {}
+        }
+        println!();
+    }
     fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
         #[cfg(feature = "use_bytecode")]
         {
@@ -90,13 +109,41 @@ impl Lox {
             let emitter = Emitter::new();
             let mut compiler = Compiler::new(Box::new(scanner), Box::new(emitter));
 
-            let chunk = compiler.compile().expect("compilation error");
+            let chunk = compiler.compile();
 
-            let mut vm = VM::new();
+            let mut error = None;
 
-            match vm.run(chunk.as_ref()) {
-                Ok(_) => {}
-                Err(e) => eprintln!("ERROR"),
+            match chunk {
+                Ok(chunk) => {
+                    let mut vm = VM::new();
+
+                    match vm.run(chunk.as_ref()) {
+                        Ok(_) => {}
+                        Err(e) => error = Some(e),
+                    }
+                }
+                Err(e) => error = Some(e),
+            }
+
+            if let Some(err) = error {
+                println!("{}: {}", "error".red(), format!("{err}").bright_white());
+                match err {
+                    LoxError::Scanner(err) => {
+                        println!("{}", compiler.scanner.format_error_loc(err.span));
+                    }
+                    LoxError::Parser(err) => {
+                        println!("{}", compiler.scanner.format_error_loc(err.next_token.span));
+                    }
+                    LoxError::Interpreter(err) => {
+                        println!("{}", compiler.scanner.format_error_loc(err.span));
+                    }
+                    LoxError::Runtime(err) => {
+                        let span = compiler.emitter.locate_byte(err.addr).unwrap_or_else(|| Span::default());
+                        println!("{}", compiler.scanner.format_error_loc(span));
+                    }
+                    _ => {}
+                }
+                println!();
             }
 
             return false;

@@ -7,7 +7,7 @@ use crate::error::RuntimeError;
 #[derive(Clone)]
 pub struct Chunk {
     code: Vec<u8>,
-    constants: Vec<f64>,
+    constants: Vec<Value>,
 }
 
 type Error = String;

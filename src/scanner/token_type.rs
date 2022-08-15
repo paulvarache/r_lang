@@ -1,7 +1,9 @@
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum TokenType {
+    #[default]
+    Undefined,
     OpenParen, CloseParen, OpenBrace, CloseBrace,
     Comma, Dot, Minus, Plus, Semicolon, Slash, Star,
 
