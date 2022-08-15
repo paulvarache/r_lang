@@ -95,6 +95,7 @@ pub enum RuntimeErrorCode {
     OutOfConstantsBounds,
     UnaryMinusInvalidType,
     NumberBinaryExprOperandsIncorrectType,
+    UndefinedGlobal,
 }
 
 #[derive(Debug)]
@@ -175,6 +176,7 @@ impl Demistify for RuntimeError {
             RuntimeErrorCode::OutOfConstantsBounds => todo!(),
             RuntimeErrorCode::UnaryMinusInvalidType => "'-' operand only accepts numbers".to_string(),
             RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType => "incompatible types".to_string(),
+            RuntimeErrorCode::UndefinedGlobal => "undefined global variable".to_string(),
         }
     }
 }

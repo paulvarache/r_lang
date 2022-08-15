@@ -29,6 +29,10 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant(chunk, offset + 1)?;
                 offset + 2
             }
+            OpCode::DefineGlobal | OpCode::GlobalGet |OpCode::GlobalSet => {
+                print_variable(chunk, offset + 1)?;
+                offset + 2
+            }
             OpCode::ConstantLong => {
                 print_constant_long(chunk, offset + 1)?;
                 offset + 4
@@ -44,6 +48,8 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::Equal
             | OpCode::Greater
             | OpCode::Less
+            | OpCode::Print
+            | OpCode::Pop
             | OpCode::False => offset + 1,
         };
         println!("");
@@ -64,19 +70,31 @@ fn print_value(value: Value) {
     print!("{}", format!("{:?}", value).bright_yellow())
 }
 
-fn print_constant(chunk: &Chunk, index: usize) -> LoxResult<()> {
+fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
     let constant_addr = chunk.get_at(index).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
             code: RuntimeErrorCode::OutOfChunkBounds,
             addr: index,
         })
     })?;
-    let value = chunk.get_constant(constant_addr as usize).ok_or_else(|| {
+    chunk.get_constant(constant_addr as usize).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
             code: RuntimeErrorCode::OutOfConstantsBounds,
             addr: index,
         })
-    })?;
+    })
+}
+
+fn print_variable(chunk: &Chunk, index: usize) -> LoxResult<()> {
+    let value = get_constant(chunk, index)?;
+    if let Value::String(value) = value {
+        print!("{}", value.bright_purple())
+    }
+    Ok(())
+}
+
+fn print_constant(chunk: &Chunk, index: usize) -> LoxResult<()> {
+    let value = get_constant(chunk, index)?;
     print_value(value);
     Ok(())
 }

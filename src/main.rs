@@ -23,11 +23,12 @@ mod resolver;
 mod scanner;
 
 use bytecode::chunk::Chunk;
+use bytecode::debug::disassemble_chunk;
 use bytecode::emitter;
 use bytecode::emitter::Emitter;
 use bytecode::sourcemap::Sourcemap;
 use bytecode::vm::VM;
-use bytecode::Compiler;
+use bytecode::compiler::Compiler;
 use colored::Colorize;
 use error::LoxError;
 use parser::Parser;
@@ -85,22 +86,6 @@ impl Lox {
         print!("Usage: lox <src>");
         process::exit(64);
     }
-    fn report_error(&self, err: LoxError, scanner: &Scanner) {
-        println!("{}: {}", "error".red(), format!("{err}").bright_white());
-        match err {
-            LoxError::Scanner(err) => {
-                println!("{}", scanner.format_error_loc(err.span));
-            }
-            LoxError::Parser(err) => {
-                println!("{}", scanner.format_error_loc(err.next_token.span));
-            }
-            LoxError::Interpreter(err) => {
-                println!("{}", scanner.format_error_loc(err.span));
-            }
-            _ => {}
-        }
-        println!();
-    }
     fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
         #[cfg(feature = "use_bytecode")]
         {
@@ -111,8 +96,9 @@ impl Lox {
 
             let chunk = compiler.compile();
 
+            
             let mut error = None;
-
+            
             match chunk {
                 Ok(chunk) => {
                     let mut vm = VM::new();

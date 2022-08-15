@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use colored::Colorize;
 
 use crate::bytecode::chunk::Chunk;
@@ -12,6 +14,7 @@ use crate::error::RuntimeErrorCode;
 pub struct VM {
     ip: usize,
     stack: Vec<Value>,
+    globals: HashMap<String, Value>,
 }
 
 macro_rules! expr {
@@ -25,6 +28,7 @@ impl VM {
         Self {
             ip: 0,
             stack: Vec::new(),
+            globals: HashMap::new(),
         }
     }
     pub fn run(&mut self, chunk: &Chunk) -> LoxResult<()> {
@@ -118,6 +122,35 @@ impl VM {
                     let right = self.pop();
                     let left = self.pop();
                     self.push(Value::Bool(&left < &right));
+                }
+                OpCode::Print => println!("{:?}", self.pop()),
+                OpCode::Pop => { self.pop(); },
+                OpCode::DefineGlobal => {
+                    let value = self.read_constant(&chunk)?;
+                    if let Value::String(name) = value {
+                        let p = self.pop();
+                        self.globals.insert(name, p.clone());
+                    }
+                },
+                OpCode::GlobalGet => {
+                    let name = self.read_constant(&chunk)?;
+                    if let Value::String(name) = name {
+                        if let Some(value) = self.globals.get(&name) {
+                            self.push(value.clone());
+                        } else {
+                            return Err(self.error(RuntimeErrorCode::UndefinedGlobal));
+                        }
+                    }
+                },
+                OpCode::GlobalSet => {
+                    let name = self.read_constant(&chunk)?;
+                    if let Value::String(name) = name {
+                        if !self.globals.contains_key(&name) {
+                            return Err(self.error(RuntimeErrorCode::UndefinedGlobal));
+                        }
+                        let value = self.peek(0);
+                        self.globals.insert(name, value.clone());
+                    }
                 }
             }
             #[cfg(feature = "debug_trace_execution")]

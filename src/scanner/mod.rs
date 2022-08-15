@@ -156,7 +156,8 @@ impl<'a> Scan for Scanner<'a> {
                 line.len() + 1
             };
 
-            let fill = format!("{0:2$}{1:3$}{0:4$}", " ", "^", start_col - 1, end_col - start_col, line.len() - (end_col - 1));
+            let nil = "";
+            let fill = format!("{nil:0$}{nil:^<1$}{nil:2$}", start_col - 1, end_col - start_col, line.len() - (end_col - 1));
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
             let underline_prefix = format!("{:01$} |", "", max_pad).cyan();

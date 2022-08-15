@@ -17,5 +17,10 @@ pub enum OpCode {
     Multiply,
     Divide,
     Not,
-    Return
+    Return,
+    Print,
+    Pop,
+    DefineGlobal,
+    GlobalGet,
+    GlobalSet,
 }
