@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
 use crate::ast::*;
-use crate::lox_error::Demistify;
-use crate::lox_error::LoxError;
-use crate::lox_error::LoxResult;
-use crate::lox_error::ParserError;
-use crate::lox_error::ParserErrorCode;
-use crate::scanner::token::Span;
+use crate::error::Demistify;
+use crate::error::LoxError;
+use crate::error::LoxResult;
+use crate::error::ParserError;
+use crate::error::ParserErrorCode;
+use crate::scanner::span::Span;
 use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
@@ -24,7 +24,6 @@ impl ParserError {
 impl Demistify for ParserError {
     fn demistify(&self) -> String {
         match self.code {
-            ParserErrorCode::None => "None".to_string(),
             ParserErrorCode::MissingIdentifierAfterVarKeyword => {
                 format!(
                     "expected identifier after 'var'{}",
@@ -74,9 +73,6 @@ impl Demistify for ParserError {
                 format!("expected '(' after if{}", self.demistify_next_token())
             }
             ParserErrorCode::UnterminatedIfPredicate => "UnterminatedIfPredicate".to_string(),
-            ParserErrorCode::MissingClosingParenAfterIfPredicate => {
-                "MissingClosingParenAfterIfPredicate".to_string()
-            }
             ParserErrorCode::MissingStatementAfterIf => "MissingStatementAfterIf".to_string(),
             ParserErrorCode::MissingStatementAfterElse => "MissingStatementAfterElse".to_string(),
             ParserErrorCode::MissingOpenParenAfterWhileKeyword => {
@@ -120,7 +116,7 @@ impl Demistify for ParserError {
                 "MissingClosingParenAfterGroup".to_string()
             }
             ParserErrorCode::UnexpectedTokenInExpression => {
-                "UnexpectedTokenInExpression".to_string()
+                format!("{}, {}", "UnexpectedTokenInExpression", self.token)
             }
             ParserErrorCode::FunctionCallToManyArguments => {
                 "too many arguments passed to function".to_string()
@@ -149,9 +145,19 @@ impl Demistify for ParserError {
             ParserErrorCode::MissingSemicolonAfterReturnStatement => {
                 "MissingSemicolonAfterReturnStatement".to_string()
             }
-            ParserErrorCode::InitVarWithUnassignedVar => {
-                "can't read local variable in its own initializer".to_string()
-            } // c => format!("missing error demistifyer for {}", c as u32),
+            ParserErrorCode::MissingIdentifierAfterClassKeyword => {
+                "MissingIdentifierAfterClassKeyword".to_string()
+            }
+            ParserErrorCode::MissingOpenBraceAfterClassName => {
+                "MissingOpenBraceAfterClassName".to_string()
+            }
+            ParserErrorCode::MissingIdentifierAfterCallDot => format!(
+                "expected property name after '.'{}",
+                self.demistify_next_token()
+            ),
+            ParserErrorCode::MissingSuperclassName => format!("expected parent class name after '<'{}", self.demistify_next_token()),
+            ParserErrorCode::MissingDotAfterSuperKeyword => format!("expected '.' after super keyword{}", self.demistify_next_token()),
+            ParserErrorCode::MissingIdentiferAfterSuperDot => format!("expected identifier after super.{}", self.demistify_next_token()), // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }
@@ -159,7 +165,7 @@ impl Demistify for ParserError {
 pub struct Parser<'a> {
     last: Option<Token>,
     next: Option<Token>,
-    scanner: Box<dyn Scan + 'a>,
+    pub scanner: Box<dyn Scan + 'a>,
 }
 
 impl<'a> Parser<'a> {
@@ -176,9 +182,12 @@ impl<'a> Parser<'a> {
     //              | statement
     pub fn declaration(&mut self) -> Result<Option<Stmt>, LoxError> {
         let r = if let Some(fun_token) = self.is_match(&[TokenType::Fun])? {
-            Ok(Some(self.fun_declaration(&fun_token)?))
+            self.fun_declaration(Some(&fun_token))
+                .map(|f| Some(Stmt::Function(f)))
         } else if let Some(var_token) = self.is_match(&[TokenType::Var])? {
-            Ok(Some(self.var_declaration(&var_token)?))
+            self.var_declaration(&var_token).map(Some)
+        } else if let Some(var_token) = self.is_match(&[TokenType::Class])? {
+            self.class_declaration(&var_token).map(Some)
         } else {
             self.statement()
         };
@@ -215,13 +224,13 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::new_var(
             name,
-            initializer.map(|init| Rc::new(init)),
+            initializer.map(Rc::new),
             Span::new_from_range(var_token.span, token.span),
         ))
     }
 
     // fun_declaration -> IDENTIFIER "(" parameters? ")" block;
-    fn fun_declaration(&mut self, fun_token: &Token) -> LoxResult<Stmt> {
+    fn fun_declaration(&mut self, fun_token: Option<&Token>) -> LoxResult<FunctionStmt> {
         let name = self.consume(
             TokenType::Identifier,
             ParserErrorCode::MissingIdentifierAfterFunKeyword,
@@ -261,11 +270,50 @@ impl<'a> Parser<'a> {
 
         let body = self.block()?;
 
-        Ok(Stmt::new_function(
+        let start_span = fun_token.map(|t| t.span).unwrap_or(name.span);
+
+        Ok(FunctionStmt::new(
             name,
             Rc::new(params),
             Rc::new(body),
-            Span::new_from_range(fun_token.span, fun_token.span), // TODO get end span of block
+            Span::new_from_range(start_span, start_span), // TODO get end span of block
+        ))
+    }
+
+    // class_declaration -> "class" INDENTIFIER ( "<" IDENTIFIER )?
+    //                    | "{" function* "}"
+    fn class_declaration(&mut self, token: &Token) -> LoxResult<Stmt> {
+        let name = self.consume(
+            TokenType::Identifier,
+            ParserErrorCode::MissingIdentifierAfterClassKeyword,
+        )?;
+
+        let mut superclass = None;
+
+        if let Some(_) = self.is_match(&[TokenType::Less])? {
+            let superclass_name = self.consume(TokenType::Identifier, ParserErrorCode::MissingSuperclassName)?;
+            superclass = Some(Rc::new(VarExpr::new(superclass_name.clone(), superclass_name.span)));
+        }
+
+        self.consume(
+            TokenType::OpenBrace,
+            ParserErrorCode::MissingOpenBraceAfterClassName,
+        )?;
+
+        let mut methods = Vec::new();
+
+        while self.is_match(&[TokenType::CloseBrace])?.is_none() {
+            let fun = self.fun_declaration(None)?;
+            methods.push(Rc::new(fun));
+        }
+
+        let end_token = self.last.as_ref().unwrap(); // must be closing brace for the while loop to exit anyways
+
+        Ok(Stmt::new_class(
+            name,
+            Rc::new(methods),
+            superclass,
+            Span::new_from_range(token.span, end_token.span),
         ))
     }
 
@@ -347,7 +395,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Stmt::new_return(
-            expr.map(|e| Rc::new(e)),
+            expr.map(Rc::new),
             Span::new_from_range(return_token.span, end_span),
         ))
     }
@@ -500,7 +548,7 @@ impl<'a> Parser<'a> {
         Ok(statements)
     }
 
-    // assignment -> IDENTIFIER "=" assignment
+    // assignment -> ( "." call )? IDENTIFIER "=" assignment
     //             | logic_or
     fn assignment(&mut self) -> LoxResult<Option<Expr>> {
         if let Some(expr) = self.logic_or()? {
@@ -508,13 +556,24 @@ impl<'a> Parser<'a> {
                 let value = self
                     .assignment()?
                     .ok_or_else(|| self.error(ParserErrorCode::UnterminatedAssignment))?;
-                if let Expr::Var(v) = expr {
-                    let span = value.span();
-                    return Ok(Some(Expr::new_assign(
-                        v.name.clone(),
-                        Rc::new(value),
-                        Span::new_from_range(v.name.span, span),
-                    )));
+                match expr {
+                    Expr::Var(v) => {
+                        let span = value.span();
+                        return Ok(Some(Expr::new_assign(
+                            v.name.clone(),
+                            Rc::new(value),
+                            Span::new_from_range(v.name.span, span),
+                        )));
+                    }
+                    Expr::Get(g) => {
+                        return Ok(Some(Expr::new_set(
+                            Rc::clone(&g.object),
+                            g.name.clone(),
+                            Rc::new(value.clone()),
+                            Span::new_from_range(g.span, value.span()),
+                        )));
+                    }
+                    _ => {}
                 }
                 return Err(self.error(ParserErrorCode::InvalidAssignmentTarget));
             }
@@ -634,20 +693,31 @@ impl<'a> Parser<'a> {
             let right = self
                 .term()?
                 .ok_or_else(|| self.error(ParserErrorCode::MissingUnaryRightHandSide))?;
-            let span = Span::new_from_range(operator.span.clone(), right.span());
+            let span = Span::new_from_range(operator.span, right.span());
             return Ok(Some(Expr::new_unary(operator, Rc::new(right), span)));
         }
         self.call()
     }
-    // call -> primary ("(" arguments? ")")*
+    // call -> primary ("(" arguments? ")" | "." IDENTIFIER)*
     fn call(&mut self) -> LoxResult<Option<Expr>> {
         self.primary()?
             .map(|mut expr| {
                 loop {
-                    if self.is_match(&[TokenType::OpenParen])?.is_none() {
+                    if self.is_match(&[TokenType::OpenParen])?.is_some() {
+                        expr = self.finish_call(expr)?;
+                    } else if let Some(dot) = self.is_match(&[TokenType::Dot])? {
+                        let name = self.consume(
+                            TokenType::Identifier,
+                            ParserErrorCode::MissingIdentifierAfterCallDot,
+                        )?;
+                        expr = Expr::new_get(
+                            Rc::new(expr),
+                            name.clone(),
+                            Span::new_from_range(dot.span, name.span),
+                        );
+                    } else {
                         break;
                     }
-                    expr = self.finish_call(expr)?;
                 }
                 Ok(Some(expr))
             })
@@ -687,7 +757,9 @@ impl<'a> Parser<'a> {
         let span = Span::new_from_range(callee.span(), token.span);
         Ok(Expr::new_call(Rc::new(callee), Rc::new(arguments), span))
     }
-    // primary -> NUMBER | STRING | true | false | nil | '(' expression ')' | IDENTIFIER
+    // primary -> true | false | nil
+    //          | NUMBER | STRING | IDENTIFER | "(" expression ")"
+    //          | "super" "." IDENTIFIER
     fn primary(&mut self) -> Result<Option<Expr>, LoxError> {
         match self.peek()? {
             Some(token) => match token.ttype {
@@ -738,6 +810,16 @@ impl<'a> Parser<'a> {
                     self.skip()?;
                     Ok(Some(Expr::new_var(token.clone(), token.span)))
                 }
+                TokenType::This => {
+                    self.skip()?;
+                    Ok(Some(Expr::new_this(token.clone(), token.span)))
+                }
+                TokenType::Super => {
+                    self.skip()?;
+                    self.consume(TokenType::Dot, ParserErrorCode::MissingDotAfterSuperKeyword)?;
+                    let name = self.consume(TokenType::Identifier, ParserErrorCode::MissingIdentiferAfterSuperDot)?;
+                    Ok(Some(Expr::new_super(name.clone(), Span::new_from_range(token.span, name.span))))
+                },
                 TokenType::Eof => Ok(None),
                 _ => Err(self.error(ParserErrorCode::UnexpectedTokenInExpression)),
             },
@@ -843,13 +925,11 @@ impl<'a> Parser<'a> {
         next_token: &Option<Token>,
         code: ParserErrorCode,
     ) -> LoxError {
-        let err = LoxError::Parser(ParserError {
+        LoxError::Parser(ParserError {
             token: token.clone(),
             next_token: next_token.clone(),
             code,
-        });
-        err.report();
-        err
+        })
     }
 }
 
@@ -860,9 +940,9 @@ mod tests {
     use crate::ast::LiteralExpr;
     use crate::ast::Stmt;
     use crate::ast::VarExpr;
-    use crate::lox_error::LoxResult;
-    use crate::lox_error::ParserErrorCode;
-    use crate::scanner::token::Span;
+    use crate::error::LoxResult;
+    use crate::error::ParserErrorCode;
+    use crate::scanner::span::Span;
     use crate::scanner::token::Token;
     use crate::scanner::token_type::TokenType;
     use crate::scanner::value::Value;
@@ -891,6 +971,10 @@ mod tests {
                 _ => Some(self.tokens.remove(0)),
             })
         }
+
+        fn format_error_loc(&self, _span: Span) -> String {
+            "".to_string()
+        }
     }
 
     fn token(ttype: TokenType) -> Token {
@@ -898,6 +982,9 @@ mod tests {
     }
     fn token_literal(ttype: TokenType, literal: Value) -> Token {
         Token::new(ttype, format!(""), Span::new(0, 0, 0, 0), Some(literal))
+    }
+    fn token_lexeme(ttype: TokenType, lexeme: &str) -> Token {
+        Token::new(ttype, lexeme.to_string(), Span::new(0, 0, 0, 0), None)
     }
 
     fn test_parse_stmt(tokens: Vec<Token>) -> LoxResult<Option<Stmt>> {
@@ -1080,7 +1167,10 @@ mod tests {
         let s = TestScanner::new(vec![token(TokenType::Semicolon)]);
         let mut parser = Parser::new(Box::new(s));
 
-        let res = parser.consume(TokenType::Semicolon, ParserErrorCode::None);
+        let res = parser.consume(
+            TokenType::Semicolon,
+            ParserErrorCode::FunctionCallToManyArguments,
+        );
         assert!(res.is_ok())
     }
 
@@ -1089,7 +1179,10 @@ mod tests {
         let s = TestScanner::new(vec![token(TokenType::Minus)]);
         let mut parser = Parser::new(Box::new(s));
 
-        let res = parser.consume(TokenType::Semicolon, ParserErrorCode::None);
+        let res = parser.consume(
+            TokenType::Semicolon,
+            ParserErrorCode::FunctionCallToManyArguments,
+        );
         assert!(res.is_err())
     }
 
@@ -1303,5 +1396,42 @@ mod tests {
             parser.last.clone().unwrap().ttype,
             TokenType::Plus
         ));
+    }
+
+    #[test]
+    fn class() {
+        let s = TestScanner::new(vec![
+            token(TokenType::Class),
+            token_lexeme(TokenType::Identifier, "MyClass"),
+            token(TokenType::OpenBrace),
+            token_lexeme(TokenType::Identifier, "method_1"),
+            token(TokenType::OpenParen),
+            token(TokenType::CloseParen),
+            token(TokenType::OpenBrace),
+            token(TokenType::CloseBrace),
+            token_lexeme(TokenType::Identifier, "method_2"),
+            token(TokenType::OpenParen),
+            token(TokenType::CloseParen),
+            token(TokenType::OpenBrace),
+            token(TokenType::CloseBrace),
+            token(TokenType::CloseBrace),
+        ]);
+        let mut parser = Parser::new(Box::new(s));
+
+        let result = parser.declaration();
+
+        println!("{result:?}");
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.is_some());
+        let result = result.unwrap();
+
+        if let Stmt::Class(class) = result {
+            assert_eq!(class.name.lexeme, "MyClass");
+            assert_eq!(class.methods.len(), 2);
+        } else {
+            assert!(false);
+        }
     }
 }

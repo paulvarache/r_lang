@@ -1,21 +1,24 @@
+pub mod span;
 pub mod token;
 pub mod token_type;
 pub mod value;
 
+use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
-use std::io;
 
-use crate::lox_error::Demistify;
-use crate::lox_error::LoxError;
-use crate::lox_error::LoxErrorCode;
-use crate::lox_error::LoxResult;
-use crate::lox_error::ScannerError;
-use crate::lox_error::ScannerErrorCode;
+use colored::Colorize;
+
+use crate::error::Demistify;
+use crate::error::LoxError;
+use crate::error::LoxErrorCode;
+use crate::error::LoxResult;
+use crate::error::ScannerError;
+use crate::error::ScannerErrorCode;
 use crate::scanner::value::Value;
 
-use self::token::Span;
+use self::span::Span;
 use self::token::Token;
 use self::token_type::TokenType;
 
@@ -23,27 +26,18 @@ impl Demistify for ScannerError {
     fn demistify(&self) -> String {
         match self.code {
             LoxErrorCode::Scanner(code) => match code {
-                ScannerErrorCode::NumberParsingError => {
-                    format!(
-                        "could not parse number at '({}, {}) -> ({}, {})'",
-                        self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1
-                    )
-                }
-                ScannerErrorCode::UnterminatedString => {
-                    format!(
-                        "unterminated string at '({}, {}) -> ({}, {})'",
-                        self.span.start.0, self.span.start.1, self.span.end.0, self.span.end.1
-                    )
-                }
+                ScannerErrorCode::NumberParsingError => "could not parse number".to_string(),
+                ScannerErrorCode::UnterminatedString => "unterminated string".to_string(),
                 ScannerErrorCode::Unknown => "".to_string(),
             },
-            _ => "".to_string(),
+            // _ => "".to_string(),
         }
     }
 }
 
 pub trait Scan {
     fn span(&self) -> Span;
+    fn format_error_loc(&self, span: Span) -> String;
     fn next(&mut self) -> LoxResult<Option<Token>>;
 }
 
@@ -56,6 +50,7 @@ pub struct Scanner<'a> {
     col: usize,
     position: (usize, usize),
     reader: BufReader<Box<dyn io::Read + 'a>>,
+    source: Vec<String>,
 }
 
 fn is_alpha(c: u8) -> bool {
@@ -122,14 +117,19 @@ impl<'a> Scan for Scanner<'a> {
                         Ok(Some(self.get_token(TokenType::Slash)))
                     }
                 }
-                b' ' | b'\r' | b'\t' => {
+                b'\r' => {
+                    self.col -= 1;
+                    self.skip();
+                    self.next()
+                }
+                b' ' | b'\t' => {
                     self.skip();
                     self.next()
                 }
                 b'\n' => {
-                    self.skip();
                     self.col = 1;
                     self.line += 1;
+                    self.skip();
                     self.next()
                 }
                 b'"' => self.get_string(),
@@ -138,6 +138,37 @@ impl<'a> Scan for Scanner<'a> {
                 _ => Err(self.error(ScannerErrorCode::Unknown)),
             },
         }
+    }
+
+    fn format_error_loc(&self, span: Span) -> String {
+        let default = "".to_string();
+        let mut res = Vec::new();
+        let all_lines = span.start.0..(span.end.0 + 1);
+        let max_pad = all_lines.clone().max().unwrap_or(1).to_string().len();
+        res.push(format!(" {:01$} |", "", max_pad).cyan().to_string());
+        for i in all_lines {
+            let line = self.source.get(i - 1).unwrap_or(&default);
+
+            let start_col = if span.start.0 == i { span.start.1 } else { 1 };
+            let end_col = if span.end.0 == i {
+                span.end.1
+            } else {
+                line.len() + 1
+            };
+
+            let start_pad = std::iter::repeat(" ").take(start_col - 1).collect::<String>();
+            let underline = std::iter::repeat("^").take(end_col - start_col).collect::<String>().red();
+            let end_pad = std::iter::repeat(" ").take(line.len() - end_col).collect::<String>();
+
+            let fill = format!("{start_pad}{underline}{end_pad}");
+
+            let line_prefix = format!("{i:00$} |", max_pad).cyan();
+            let underline_prefix = format!("{:01$} |", "", max_pad).cyan();
+
+            res.push(format!(" {line_prefix} {line}"));
+            res.push(format!(" {underline_prefix} {fill}"));
+        }
+        res.join("\n")
     }
 }
 
@@ -152,6 +183,7 @@ impl<'a> Scanner<'a> {
             reached_end: false,
             buffer: Vec::new(),
             reader: BufReader::new(r),
+            source: vec![],
         }
     }
     pub fn error(&mut self, code: ScannerErrorCode) -> LoxError {
@@ -162,13 +194,11 @@ impl<'a> Scanner<'a> {
         }
     }
     fn report_error(&mut self, next_c: Option<u8>, code: ScannerErrorCode) -> LoxError {
-        let err = LoxError::Scanner(ScannerError {
+        LoxError::Scanner(ScannerError {
             span: self.span(),
             next_c,
             code: LoxErrorCode::Scanner(code),
-        });
-        err.report();
-        err
+        })
     }
     // TODO: https://doc.rust-lang.org/std/io/trait.BufRead.html#method.has_data_left
     pub fn is_at_end(&mut self) -> bool {
@@ -178,7 +208,9 @@ impl<'a> Scanner<'a> {
         let mut buf: [u8; 1] = [0];
         while self.cursor + n > self.buffer.len() {
             self.reader.read_exact(&mut buf)?;
-            self.buffer.push(buf[0]);
+            if buf[0] != b'\r' {
+                self.buffer.push(buf[0]);
+            }
         }
         Ok(())
     }
@@ -193,9 +225,7 @@ impl<'a> Scanner<'a> {
         }
     }
     fn skip(&mut self) {
-        self.buffer = self.buffer[self.cursor..].to_vec();
-        self.cursor = 0;
-        self.position = (self.line, self.col);
+        self.consume();
     }
     fn is_match(&mut self, c: u8) -> bool {
         match self.peek() {
@@ -221,6 +251,14 @@ impl<'a> Scanner<'a> {
     fn consume(&mut self) -> String {
         let leftover = self.buffer.split_off(self.cursor);
         let s = String::from_utf8(self.buffer.clone()).expect("Failed to parse utf-8");
+        let lines = s.clone();
+        let sp: Vec<String> = lines.split('\n').map(|s| s.to_string()).collect();
+        let mut last = self.source.pop().unwrap_or_else(|| "".to_string());
+        let def: (&String, &[String]) = (&"".to_string(), &[]);
+        let (first, l) = sp.split_first().unwrap_or(def);
+        last += first;
+        self.source.push(last);
+        self.source.append(&mut l.to_vec());
         self.buffer = leftover;
         self.cursor = 0;
         self.position = (self.line, self.col);
@@ -236,7 +274,8 @@ impl<'a> Scanner<'a> {
         self.get_token(tok)
     }
     fn get_token(&mut self, ttype: TokenType) -> Token {
-        Token::new(ttype, self.consume(), self.span(), None)
+        let span = self.span();
+        Token::new(ttype, self.consume(), span, None)
     }
     fn get_token_literal(
         &mut self,
@@ -379,12 +418,25 @@ impl<'a> Scanner<'a> {
 mod tests {
     use stringreader::StringReader;
 
-    use crate::scanner::{value::Value, Scan};
+    use crate::scanner::value::Value;
+    use crate::scanner::Scan;
 
     use super::Scanner;
 
     #[test]
-    fn test_string_token() {
+    fn get_float() {
+        let reader = StringReader::new("0.0");
+        let mut scanner = Scanner::new(Box::new(reader));
+
+        let result = scanner.next();
+
+        assert!(result.is_ok());
+
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn string_token() {
         let reader = StringReader::new("\"hello\"");
         let mut scanner = Scanner::new(Box::new(reader));
 
@@ -399,7 +451,7 @@ mod tests {
         assert_eq!(literal, Value::String("hello".to_string()));
     }
     #[test]
-    fn test_string_token_seq() {
+    fn string_token_seq() {
         let reader = StringReader::new("\"hello\" \"hi\"");
         let mut scanner = Scanner::new(Box::new(reader));
 

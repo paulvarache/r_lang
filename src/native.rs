@@ -1,9 +1,11 @@
+use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use crate::callable::LoxCallable;
+use crate::class::LoxClass;
 use crate::interpreter::Interpreter;
-use crate::lox_error::LoxResult;
+use crate::error::LoxResult;
 use crate::scanner::value::Value;
 
 pub struct DateNative {}
@@ -13,6 +15,7 @@ impl LoxCallable for DateNative {
         &self,
         _interpreter: &Interpreter,
         _args: Vec<Value>,
+        _class: Option<Rc<LoxClass>>,
     ) -> LoxResult<Value> {
         Ok(Value::Number(
             SystemTime::now()

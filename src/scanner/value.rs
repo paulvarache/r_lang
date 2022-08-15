@@ -5,6 +5,8 @@ use std::ops;
 use std::rc::Rc;
 
 use crate::callable::Callable;
+use crate::class::LoxClass;
+use crate::class::LoxInstance;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -12,6 +14,8 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Func(Rc<Callable>),
+    Class(Rc<LoxClass>),
+    Instance(Rc<LoxInstance>),
     Nil,
 }
 
@@ -22,6 +26,8 @@ impl fmt::Display for Value {
             Value::Number(n) => write!(f, "Number({})", n),
             Value::Bool(b) => write!(f, "Bool({})", b),
             Value::Func(_) => write!(f, "Func()"),
+            Value::Class(c) => write!(f, "Class({})", c.name.lexeme),
+            Value::Instance(c) => write!(f, "Instance({})", c.name.lexeme),
             Value::Nil => write!(f, "Nil"),
         }
     }

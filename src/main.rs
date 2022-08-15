@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::env;
 use std::fs::File;
 use std::io;
@@ -6,19 +7,30 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::process;
+use std::rc::Rc;
 
 mod ast;
-mod environment;
-mod interpreter;
-mod lox_error;
-mod parser;
-mod scanner;
-mod native;
+mod bytecode;
 mod callable;
+mod class;
+mod environment;
+mod error;
 mod function;
+mod interpreter;
+mod native;
+mod parser;
 mod resolver;
+mod scanner;
 
+use bytecode::chunk::Chunk;
+use bytecode::emitter::Emitter;
+use bytecode::sourcemap::Sourcemap;
+use bytecode::vm::VM;
+use bytecode::Compiler;
+use colored::Colorize;
+use error::LoxError;
 use parser::Parser;
+use resolver::Resolver;
 use stringreader::StringReader;
 
 use crate::interpreter::Interpreter;
@@ -71,38 +83,95 @@ impl Lox {
         process::exit(64);
     }
     fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
-        let mut had_error = false;
-        let mut parser = Parser::new(Box::new(Scanner::new(reader)));
-        // let printer = AstPrinter {};
+        #[cfg(feature = "use_bytecode")]
+        {
+            let scanner = Scanner::new(reader);
 
-        loop {
-            match parser.declaration() {
-                Ok(stmt) => match stmt {
-                    Some(stmt) => {
-                        // println!(
-                        //     "Parsed statement {}",
-                        //     printer.print(&stmt).unwrap()
-                        // );
-                        // Don't evaluate the next statement it it failed before
-                        if had_error {
-                            continue;
-                        }
+            let emitter = Emitter::new();
+            let mut compiler = Compiler::new(Box::new(scanner), Box::new(emitter));
 
-                        match self.interpreter.execute(&stmt) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                had_error = true;
-                                break;
+            let chunk = compiler.compile().expect("compilation error");
+
+            let mut vm = VM::new();
+
+            match vm.run(chunk.as_ref()) {
+                Ok(_) => {}
+                Err(e) => eprintln!("ERROR"),
+            }
+
+            return false;
+        }
+        #[cfg(not(feature = "use_bytecode"))]
+        {
+            let mut had_error = false;
+            let scanner = Scanner::new(reader);
+            let mut parser = Parser::new(Box::new(scanner));
+            let resolver = Resolver::new(&self.interpreter);
+            // let printer = AstPrinter {};
+            let mut errors = Vec::new();
+
+            loop {
+                match parser.declaration() {
+                    Ok(stmt) => match stmt {
+                        Some(stmt) => {
+                            // println!(
+                            //     "Parsed statement {}",
+                            //     printer.print(&stmt).unwrap()
+                            // );
+
+                            match resolver.resolve(&stmt) {
+                                Ok(_) => {
+                                    // Don't evaluate the next statement it it failed before
+                                    if had_error {
+                                        continue;
+                                    }
+
+                                    match self.interpreter.execute(&stmt) {
+                                        Ok(_) => {}
+                                        Err(err) => {
+                                            errors.push(err);
+                                            had_error = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    errors.push(err);
+                                    had_error = true;
+                                }
                             }
                         }
+                        None => break,
+                    },
+                    Err(err) => {
+                        errors.push(err);
+                        had_error = true
                     }
-                    None => break,
-                },
-                Err(_) => had_error = true,
-            };
-        }
+                };
+            }
 
-        had_error
+            errors.sort_by_key(|a| a.span());
+
+            for err in errors {
+                println!("{}: {}", "error".red(), format!("{err}").bright_white());
+                match err {
+                    LoxError::Scanner(err) => {
+                        println!("{}", parser.scanner.format_error_loc(err.span));
+                    }
+                    LoxError::Parser(err) => {
+                        let token = err.next_token.unwrap_or(err.token);
+                        println!("{}", parser.scanner.format_error_loc(token.span));
+                    }
+                    LoxError::Interpreter(err) => {
+                        println!("{}", parser.scanner.format_error_loc(err.span));
+                    }
+                    _ => {}
+                }
+                println!();
+            }
+
+            had_error
+        }
     }
 }
 

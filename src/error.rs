@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::scanner::token::Span;
+use crate::scanner::span::Span;
 use crate::scanner::token::Token;
 use crate::scanner::value::Value;
 
@@ -14,7 +14,6 @@ pub enum ScannerErrorCode {
 }
 #[derive(Copy, Clone, Debug)]
 pub enum ParserErrorCode {
-    None,
     MissingIdentifierAfterVarKeyword,
     MissingExpressionAfterVarEqual,
     MissingSemicolonOrEqualAfterVarDeclaration,
@@ -23,7 +22,6 @@ pub enum ParserErrorCode {
     MissingSemicolonAfterExpressionStatement,
     MissingOpenParenAfterIfKeyword,
     UnterminatedIfPredicate,
-    MissingClosingParenAfterIfPredicate,
     MissingStatementAfterIf,
     MissingStatementAfterElse,
     MissingOpenParenAfterWhileKeyword,
@@ -58,7 +56,12 @@ pub enum ParserErrorCode {
     MissingOpenBraceAfterFunctionDefinition,
     MissingExpressionAfterReturnKeyword,
     MissingSemicolonAfterReturnStatement,
-    InitVarWithUnassignedVar,
+    MissingIdentifierAfterClassKeyword,
+    MissingOpenBraceAfterClassName,
+    MissingIdentifierAfterCallDot,
+    MissingSuperclassName,
+    MissingDotAfterSuperKeyword,
+    MissingIdentiferAfterSuperDot,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -73,21 +76,34 @@ pub enum InterpreterErrorCode {
     ReadUndefinedVar,
     NotAFunction,
     FunctionArityMismatch,
+    RedefiningLocalVar,
+    InitVarWithUnassignedVar,
+    ReturnOutsideFunction,
+    AccessingNonInstanceProperty,
+    InstancePropertyUndefined,
+    ReturnInsideConstructor,
+    ParentClassIsChildClass,
+    ParentClassIsNotClass,
+    SuperOutsideClass,
+    SuperOutsideSuperclass,
+}
+#[derive(Debug)]
+pub enum CompilerErrorCode {}
+#[derive(Debug)]
+pub enum RuntimeErrorCode {
+    OutOfChunkBounds,
+    OutOfConstantsBounds,
 }
 
 #[derive(Debug)]
 pub enum LoxErrorCode {
     Scanner(ScannerErrorCode),
-    Parser(ParserErrorCode),
-    Interpreter(InterpreterErrorCode),
 }
 
 impl fmt::Display for LoxErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoxErrorCode::Scanner(code) => write!(f, "S{:0>5}", *code as u32),
-            LoxErrorCode::Parser(code) => write!(f, "P{:0>5}", *code as u32),
-            LoxErrorCode::Interpreter(code) => write!(f, "I{:0>5}", *code as u32),
         }
     }
 }
@@ -97,12 +113,21 @@ pub enum LoxError {
     Scanner(ScannerError),
     Parser(ParserError),
     Interpreter(InterpreterError),
+    Compiler(CompilerError),
+    Runtime(RuntimeError),
     Return(Value),
 }
 
 impl LoxError {
-    pub fn report(&self) {
-        eprintln!("{}", self)
+    pub fn span(&self) -> Span {
+        match self {
+            LoxError::Scanner(e) => e.span,
+            LoxError::Parser(e) => e.token.span,
+            LoxError::Interpreter(e) => e.span,
+            LoxError::Compiler(e) => e.token.span,
+            LoxError::Runtime(e) => Span::new(0, 0, 0, 0),
+            LoxError::Return(_) => Span::new(0, 0, 0, 0),
+        }
     }
 }
 #[derive(Debug)]
@@ -123,7 +148,32 @@ pub struct InterpreterError {
     pub span: Span,
     pub code: InterpreterErrorCode,
 }
+#[derive(Debug)]
+pub struct CompilerError {
+    pub token: Token,
+    pub next_token: Option<Token>,
+    pub code: CompilerErrorCode,
+}
+impl Demistify for CompilerError {
+    fn demistify(&self) -> String {
+        match self.code {
 
+        }
+    }
+}
+#[derive(Debug)]
+pub struct RuntimeError {
+    pub addr: usize,
+    pub code: RuntimeErrorCode,
+}
+impl Demistify for RuntimeError {
+    fn demistify(&self) -> String {
+        match self.code {
+            RuntimeErrorCode::OutOfChunkBounds => todo!(),
+            RuntimeErrorCode::OutOfConstantsBounds => todo!(),
+        }
+    }
+}
 pub trait Demistify {
     fn demistify(&self) -> String;
 }
@@ -133,25 +183,16 @@ impl fmt::Display for LoxError {
         match self {
             LoxError::Return(_) => Ok(()),
             LoxError::Scanner(err) => {
-                writeln!(f, "{}", err.demistify())?;
-                write!(
-                    f,
-                    "({},{}) -> ({}, {}) |",
-                    err.span.start.0, err.span.start.1, err.span.end.0, err.span.end.1
-                )
+                writeln!(f, "{}", err.demistify())
             }
             LoxError::Parser(err) => {
-                writeln!(f, "{}", err.demistify())?;
-                write!(f, "{} | {}", err.token.span.start.0, err.token.lexeme.clone())
+                writeln!(f, "{}", err.demistify())
             }
             LoxError::Interpreter(err) => {
-                writeln!(f, "{}", err.demistify())?;
-                write!(
-                    f,
-                    "({},{}) -> ({}, {}) |",
-                    err.span.start.0, err.span.start.1, err.span.end.0, err.span.end.1
-                )
+                writeln!(f, "{}", err.demistify())
             }
+            LoxError::Compiler(err) => writeln!(f, "{}", err.demistify()),
+            LoxError::Runtime(err) => writeln!(f, "{}", err.demistify()),
         }
     }
 }

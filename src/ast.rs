@@ -3,9 +3,9 @@ use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use crate::lox_error::LoxError;
+use crate::error::LoxError;
 use crate::scanner::token::Token;
-use crate::scanner::token::Span;
+use crate::scanner::span::Span;
 use crate::scanner::value::Value;
 
 static AST_NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -14,15 +14,20 @@ define_ast!(Expr(
     Assign: { name: Token, value: Expr },
     Binary: { left: Expr, operator: Token, right: Expr },
     Call: { callee: Expr, arguments: Vec<Expr> },
+    Get: { object: Expr, name: Token },
     Grouping: { expression: Expr },
     Literal: { value: Value },
     Logical: { left: Expr, operator: Token, right: Expr },
+    Set: { object: Expr, name: Token, value: Expr },
+    Super: { name: Token },
+    This: { keyword: Token },
     Unary: { operator: Token, right: Expr },
     Var: { name: Token },
 ));
 
 define_ast!(Stmt(
     Block: { statements: Vec<Stmt> },
+    Class: { name: Token, methods: Vec<FunctionStmt>, superclass: Option<VarExpr> },
     Expression: { expression: Expr },
     Function: {name: Token, params: Vec<Token>, body: Vec<Stmt> },
     If: { predicate: Expr, then_branch: Stmt, else_branch: Option<Stmt> },
@@ -35,9 +40,9 @@ define_ast!(Stmt(
 pub struct AstPrinter {}
 
 impl AstPrinter {
-    pub fn print(&self, expr: &Stmt) -> Result<String, LoxError> {
-        expr.accept(self)
-    }
+    // pub fn print(&self, expr: &Stmt) -> Result<String, LoxError> {
+    //     expr.accept(self)
+    // }
     fn parenthesize(&self, name: &String, exprs: &[&Expr]) -> Result<String, LoxError> {
         let mut builder = format!("({name}");
 
@@ -72,6 +77,8 @@ impl ExprVisitor<String> for AstPrinter {
             Value::String(s) => Ok(s.to_string()),
             Value::Bool(b) => Ok(format!("{}", b)),
             Value::Func(_) => Ok("func".to_string()),
+            Value::Class(_) => Ok("class".to_string()),
+            Value::Instance(_) => Ok("instance".to_string()),
             Value::Nil => Ok("nil".to_string()),
         }
     }
@@ -95,6 +102,22 @@ impl ExprVisitor<String> for AstPrinter {
             .try_fold(String::new(), |acc, expr| Ok(acc + &expr.accept(self)?))?;
 
         Ok(format!("call {} ({})", expr.callee.accept(self)?, args))
+    }
+
+    fn visit_get_expr(&self,expr: &GetExpr) -> Result<String,LoxError>  {
+        todo!()
+    }
+
+    fn visit_set_expr(&self,expr: &SetExpr) -> Result<String,LoxError>  {
+        todo!()
+    }
+
+    fn visit_this_expr(&self,expr: &ThisExpr) -> Result<String,LoxError>  {
+        todo!()
+    }
+
+    fn visit_super_expr(&self,expr: &SuperExpr) -> Result<String,LoxError>  {
+        todo!()
     }
 }
 
@@ -132,7 +155,7 @@ impl StmtVisitor<String> for AstPrinter {
 
     fn visit_var_stmt(&self, stmt: &VarStmt) -> Result<String, LoxError> {
         if let Some(init) = &stmt.initializer {
-            self.parenthesize(&"var".to_string(), &[&init])
+            self.parenthesize(&"var".to_string(), &[init])
         } else {
             self.parenthesize(&"var".to_string(), &[])
         }
@@ -147,6 +170,10 @@ impl StmtVisitor<String> for AstPrinter {
     }
 
     fn visit_return_stmt(&self,_stmt: &ReturnStmt) -> Result<String,LoxError>  {
+        todo!()
+    }
+
+    fn visit_class_stmt(&self,stmt: &ClassStmt) -> Result<String,LoxError>  {
         todo!()
     }
 }

@@ -1,14 +1,17 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::ast::*;
 use crate::callable::Callable;
+use crate::class::LoxClass;
 use crate::environment::*;
 use crate::function::LoxFunction;
-use crate::lox_error::*;
+use crate::error::*;
 use crate::native::DateNative;
-use crate::scanner::token::Span;
+use crate::scanner::span::Span;
+use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::value::Value;
 
@@ -29,27 +32,53 @@ impl Demistify for InterpreterError {
             InterpreterErrorCode::ReadUndefinedVar => "ReadUndefinedVar".to_string(),
             InterpreterErrorCode::NotAFunction => "NotAFunction".to_string(),
             InterpreterErrorCode::FunctionArityMismatch => "FunctionArityMismatch".to_string(),
+            InterpreterErrorCode::RedefiningLocalVar => {
+                "a variable with this name already exists in this scope".to_string()
+            }
+            InterpreterErrorCode::InitVarWithUnassignedVar => {
+                "can't read local variable in its own initializer".to_string()
+            }
+            InterpreterErrorCode::ReturnOutsideFunction => {
+                "cannot return outside a function".to_string()
+            }
+            InterpreterErrorCode::AccessingNonInstanceProperty => {
+                "properties can only be accessed on class instances".to_string()
+            }
+            InterpreterErrorCode::InstancePropertyUndefined => "property is undefined".to_string(),
+            InterpreterErrorCode::ReturnInsideConstructor => {
+                "cannot return in initializer".to_string()
+            }
+            InterpreterErrorCode::ParentClassIsChildClass => {
+                "parent class cannot be the child class itself".to_string()
+            }
+            InterpreterErrorCode::ParentClassIsNotClass => {
+                "parent class is not a class".to_string()
+            }
+            InterpreterErrorCode::SuperOutsideClass => "cannot use `super` outside a class method".to_string(),
+            InterpreterErrorCode::SuperOutsideSuperclass => "cannot use `super` in a class without a parent class".to_string(),
         }
     }
 }
 
 pub struct Interpreter {
     globals: Rc<RefCell<Environment>>,
+    pub locals: RefCell<HashMap<usize, usize>>,
     environment: RefCell<Rc<RefCell<Environment>>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let e = RefCell::new(Rc::new(RefCell::new(Environment::new())));
-        e.borrow().borrow_mut().define(
+        let globals = Rc::new(RefCell::new(Environment::new()));
+        globals.borrow_mut().define(
             "date",
             Value::Func(Rc::new(Callable {
                 func: Rc::new(DateNative {}),
             })),
         );
         Self {
-            globals: Rc::new(RefCell::new(Environment::new())),
-            environment: e,
+            globals: Rc::clone(&globals),
+            environment: RefCell::new(Rc::clone(&globals)),
+            locals: RefCell::new(HashMap::new()),
         }
     }
     pub fn execute(&self, stmt: &Stmt) -> Result<(), LoxError> {
@@ -66,6 +95,23 @@ impl Interpreter {
         self.environment.replace(previous);
 
         result
+    }
+    fn lookup_variable(&self, name: &Token, expr_id: usize, expr_span: Span) -> LoxResult<Value> {
+        let bor = self.locals.borrow();
+        let depth = bor.get(&expr_id);
+        if let Some(depth) = depth {
+            self.environment
+                .borrow()
+                .as_ref()
+                .borrow()
+                .get_at(&name.lexeme, *depth)
+        } else {
+            self.globals
+                .as_ref()
+                .borrow()
+                .get(name)
+                .ok_or_else(|| self.error(expr_span, InterpreterErrorCode::ReadUndefinedVar))
+        }
     }
     fn is_thruthy(val: Value) -> bool {
         !matches!(val, Value::Bool(false) | Value::Nil)
@@ -85,10 +131,8 @@ impl Interpreter {
             )),
         }
     }
-    fn error(&self, span: Span, code: InterpreterErrorCode) -> LoxError {
-        let err = LoxError::Interpreter(InterpreterError { span, code });
-        err.report();
-        err
+    pub fn error(&self, span: Span, code: InterpreterErrorCode) -> LoxError {
+        LoxError::Interpreter(InterpreterError { span, code })
     }
 }
 
@@ -123,6 +167,8 @@ impl StmtVisitor<()> for Interpreter {
             Value::String(s) => format!("\"{}\"", s),
             Value::Number(n) => format!("{}", n),
             Value::Func(_) => "func".to_string(),
+            Value::Class(_) => "class".to_string(),
+            Value::Instance(i) => format!("instance({})", i.name.lexeme),
         };
         println!("{}", formatted);
         Ok(())
@@ -132,7 +178,8 @@ impl StmtVisitor<()> for Interpreter {
         let value = stmt
             .initializer
             .as_ref()
-            .map_or(Ok(Value::Nil), |init| self.evaluate(&init))?;
+            .map_or(Ok(Value::Nil), |init| self.evaluate(init))?;
+
         self.environment
             .borrow()
             .borrow_mut()
@@ -148,7 +195,7 @@ impl StmtVisitor<()> for Interpreter {
     }
 
     fn visit_function_stmt(&self, stmt: &FunctionStmt) -> Result<(), LoxError> {
-        let f = LoxFunction::new(stmt, self.environment.borrow().deref());
+        let f = LoxFunction::new(stmt, self.environment.borrow().deref(), false);
         let c = Callable { func: Rc::new(f) };
 
         self.environment
@@ -162,27 +209,82 @@ impl StmtVisitor<()> for Interpreter {
         let value = stmt
             .expression
             .as_ref()
-            .map_or(Ok(Value::Nil), |expr| self.evaluate(&expr))?;
+            .map_or(Ok(Value::Nil), |expr| self.evaluate(expr))?;
         Err(LoxError::Return(value))
+    }
+
+    fn visit_class_stmt(&self, stmt: &ClassStmt) -> Result<(), LoxError> {
+        let mut superclass = None;
+        if let Some(superclass_expr) = &stmt.superclass {
+            let superclass_value = self.visit_var_expr(&superclass_expr)?;
+
+            if let Value::Class(c) = superclass_value {
+                superclass = Some(c);
+            } else {
+                return Err(self.error(
+                    superclass_expr.span,
+                    InterpreterErrorCode::ParentClassIsNotClass,
+                ));
+            }
+        }
+        self.environment
+            .borrow()
+            .as_ref()
+            .borrow_mut()
+            .define(&stmt.name.lexeme, Value::Nil);
+
+        let mut superclass_previous_env = None;
+
+        if let Some(superclass) = &superclass {
+            let env = Environment::new_with_enclosing(self.environment.borrow().clone());
+            superclass_previous_env = Some(self.environment.replace(Rc::new(RefCell::new(env))));
+            self.environment
+                .borrow()
+                .borrow_mut()
+                .define("super", Value::Class(Rc::clone(&superclass)));
+        }
+
+        let class = Value::Class(Rc::new(LoxClass::new(
+            &stmt.name,
+            stmt.methods.as_ref(),
+            superclass,
+            self.environment.borrow().deref(),
+        )));
+
+        if let Some(previous) = superclass_previous_env {
+            self.environment.replace(previous);
+        }
+
+        self.environment
+            .borrow()
+            .as_ref()
+            .borrow_mut()
+            .assign(&stmt.name, class);
+
+        Ok(())
     }
 }
 
 impl ExprVisitor<Value> for Interpreter {
     fn visit_assign_expr(&self, expr: &AssignExpr) -> Result<Value, LoxError> {
         let value = self.evaluate(&expr.value)?;
-        if !self
-            .environment
-            .borrow()
+        let bor = self.locals.borrow();
+        let depth = bor.get(&expr.id);
+        if let Some(depth) = depth {
+            self.environment.borrow().borrow_mut().assign_at(
+                &expr.name.lexeme,
+                value.clone(),
+                *depth,
+            );
+        } else if !self
+            .globals
+            .as_ref()
             .borrow_mut()
-            .assign(&expr.name, value)
+            .assign(&expr.name, value.clone())
         {
             return Err(self.error(expr.span, InterpreterErrorCode::AssignToUndefinedVar));
         }
-        self.environment
-            .borrow()
-            .borrow()
-            .get(&expr.name)
-            .ok_or_else(|| self.error(expr.span, InterpreterErrorCode::ReadUndefinedVar))
+        Ok(value)
     }
 
     fn visit_binary_expr(&self, expr: &BinaryExpr) -> Result<Value, LoxError> {
@@ -225,6 +327,48 @@ impl ExprVisitor<Value> for Interpreter {
         }
     }
 
+    fn visit_call_expr(&self, expr: &CallExpr) -> Result<Value, LoxError> {
+        let callee = self.evaluate(&expr.callee)?;
+
+        let (callable, class) = match callee {
+            Value::Func(c) => Ok((c, None)),
+            Value::Class(c) => {
+                let class = Rc::clone(&c);
+                Ok((Rc::new(Callable { func: class }), Some(Rc::clone(&c))))
+            }
+            _ => Err(self.error(expr.callee.span(), InterpreterErrorCode::NotAFunction)),
+        }?;
+
+        let args = expr
+            .arguments
+            .iter()
+            .map(|a| self.evaluate(a))
+            .collect::<LoxResult<Vec<Value>>>()?;
+
+        if args.len() != callable.func.arity() {
+            return Err(self.error(expr.span, InterpreterErrorCode::FunctionArityMismatch));
+        }
+        callable.func.call(self, args, class)
+    }
+
+    fn visit_get_expr(&self, expr: &GetExpr) -> Result<Value, LoxError> {
+        let value = self.evaluate(&expr.object)?;
+
+        if let Value::Instance(inst) = value {
+            inst.get(&expr.name, &inst).ok_or_else(|| {
+                self.error(
+                    expr.name.span,
+                    InterpreterErrorCode::InstancePropertyUndefined,
+                )
+            })
+        } else {
+            Err(self.error(
+                expr.span,
+                InterpreterErrorCode::AccessingNonInstanceProperty,
+            ))
+        }
+    }
+
     fn visit_grouping_expr(&self, expr: &GroupingExpr) -> Result<Value, LoxError> {
         self.evaluate(&expr.expression)
     }
@@ -246,15 +390,51 @@ impl ExprVisitor<Value> for Interpreter {
         }
     }
 
+    fn visit_set_expr(&self, expr: &SetExpr) -> Result<Value, LoxError> {
+        let obj = self.evaluate(&expr.object)?;
+
+        if let Value::Instance(inst) = obj {
+            let value = self.evaluate(&expr.value)?;
+            inst.set(&expr.name, &value);
+            Ok(value)
+        } else {
+            Err(self.error(
+                expr.object.span(),
+                InterpreterErrorCode::AccessingNonInstanceProperty,
+            ))
+        }
+    }
+
+    fn visit_super_expr(&self, expr: &SuperExpr) -> Result<Value, LoxError> {
+        if let Some(depth) = self.locals.borrow().get(&expr.id) {
+            let env = self.environment.borrow();
+            let env = env.as_ref().borrow();
+            let superclass = env.get_at("super", *depth)?;
+            let value = env.get_at("this", *depth - 1)?;
+            if let Value::Instance(inst) = &value {
+                if let Value::Class(superclass) = superclass {
+                    let callable = superclass
+                        .find_method(&expr.name.lexeme)
+                        .map(|m| superclass.bind_method(m, inst))
+                        .ok_or_else(|| {
+                            self.error(
+                                expr.name.span,
+                                InterpreterErrorCode::InstancePropertyUndefined,
+                            )
+                        })?;
+                    return Ok(Value::Func(Rc::new(callable)));
+                }
+            }
+        }
+        Ok(Value::Nil) // Lots of else not taken care of. The elses will not happen since all generic values will have the right type from the resolver
+    }
+
+    fn visit_this_expr(&self, expr: &ThisExpr) -> Result<Value, LoxError> {
+        self.lookup_variable(&expr.keyword, expr.id, expr.span)
+    }
+
     fn visit_unary_expr(&self, expr: &UnaryExpr) -> Result<Value, LoxError> {
         let right = self.evaluate(&expr.right)?;
-        //LoxError::interpreter(
-        //    &expr.operator,
-        //    format!(
-        //        "cannot use operator {} on type {}",
-        //        expr.operator.ttype, right
-        //    ),
-        //)
         match expr.operator.ttype {
             TokenType::Minus => match right {
                 Value::Number(_) => Ok(-right),
@@ -266,36 +446,13 @@ impl ExprVisitor<Value> for Interpreter {
     }
 
     fn visit_var_expr(&self, expr: &VarExpr) -> LoxResult<Value> {
-        self.environment
-            .borrow()
-            .borrow()
-            .get(&expr.name)
-            .ok_or_else(|| self.error(expr.span, InterpreterErrorCode::ReadUndefinedVar))
-    }
-
-    fn visit_call_expr(&self, expr: &CallExpr) -> Result<Value, LoxError> {
-        let callee = self.evaluate(&expr.callee)?;
-
-        if let Value::Func(callable) = callee {
-            let args = expr
-                .arguments
-                .iter()
-                .map(|a| self.evaluate(a))
-                .collect::<LoxResult<Vec<Value>>>()?;
-
-            if args.len() != callable.func.arity() {
-                return Err(self.error(expr.span, InterpreterErrorCode::FunctionArityMismatch));
-            }
-            callable.func.call(self, args)
-        } else {
-            Err(self.error(expr.callee.span(), InterpreterErrorCode::NotAFunction))
-        }
+        self.lookup_variable(&expr.name, expr.id, expr.span)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::scanner::token::{Span, Token};
+    use crate::scanner::token::Token;
 
     use super::*;
 
@@ -380,6 +537,7 @@ mod tests {
         let result = terp
             .environment
             .borrow()
+            .as_ref()
             .borrow()
             .get(&token_literal(TokenType::Identifier, string("hi")));
         assert_eq!(result.expect("hi"), Value::String("hello".to_string()))
@@ -424,6 +582,7 @@ mod tests {
         inter
             .environment
             .borrow()
+            .as_ref()
             .borrow()
             .get(&token_literal(TokenType::Identifier, string(name)))
             .expect("Could not read checker value")

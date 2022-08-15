@@ -4,6 +4,7 @@
 		{
 			"type": "cargo",
 			"command": "build",
+			"args": ["--features", "debug_trace_execution,use_bytecode"],
 			"problemMatcher": [
 				"$rustc"
 			],

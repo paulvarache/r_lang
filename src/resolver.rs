@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::thread::current;
 
 use crate::ast;
 use crate::ast::AssignExpr;
@@ -13,27 +14,43 @@ use crate::ast::LiteralExpr;
 use crate::ast::LogicalExpr;
 use crate::ast::Stmt;
 use crate::ast::StmtVisitor;
-use crate::lox_error::LoxError;
-use crate::lox_error::LoxResult;
-use crate::lox_error::ParserError;
-use crate::lox_error::ParserErrorCode;
+use crate::class::CONSTRUCTOR_NAME;
+use crate::interpreter::Interpreter;
+use crate::error::InterpreterErrorCode;
+use crate::error::LoxError;
+use crate::error::LoxResult;
 use crate::scanner::token::Token;
 
-pub struct Resolver {
-    scopes: RefCell<Vec<RefCell<HashMap<String, bool>>>>,
-    locals: RefCell<HashMap<usize, usize>>,
+enum FunctionType {
+    None,
+    Function,
+    Initializer,
+    Method,
+}
+enum ClassType {
+    None,
+    Class,
+    Subclass,
 }
 
-impl Resolver {
-    pub fn new() -> Self {
+pub struct Resolver<'a> {
+    interpreter: &'a Interpreter,
+    scopes: RefCell<Vec<RefCell<HashMap<String, bool>>>>,
+    current_function: RefCell<FunctionType>,
+    current_class: RefCell<ClassType>,
+}
+
+impl<'a> Resolver<'a> {
+    pub fn new(interpreter: &'a Interpreter) -> Self {
         Self {
+            interpreter,
             scopes: RefCell::new(Vec::new()),
-            locals: RefCell::new(HashMap::new()),
+            current_function: RefCell::new(FunctionType::None),
+            current_class: RefCell::new(ClassType::None),
         }
     }
-    pub fn get_depth(&self, id: usize) -> Option<usize> {
-        let b = self.locals.borrow();
-        b.get(&id).map(|d| d.clone())
+    pub fn resolve(&self, stmt: &Stmt) -> LoxResult<()> {
+        stmt.accept(self)
     }
     fn resolve_all(&self, stmts: Vec<Rc<Stmt>>) -> LoxResult<()> {
         stmts.iter().try_for_each(|s| s.accept(self))?;
@@ -45,45 +62,56 @@ impl Resolver {
     fn end_scope(&self) {
         self.scopes.borrow_mut().pop();
     }
-    fn declare(&self, token: &Token) {
+    fn declare(&self, token: &Token) -> LoxResult<()> {
         if let Some(scope) = self.scopes.borrow().last() {
+            if scope.borrow().contains_key(&token.lexeme) {
+                return Err(self
+                    .interpreter
+                    .error(token.span, InterpreterErrorCode::RedefiningLocalVar));
+            }
             scope.borrow_mut().insert(token.lexeme.clone(), false);
         }
+        Ok(())
     }
     fn define(&self, token: &Token) {
-        if let Some(mut scope) = self.scopes.borrow().last() {
-            scope.borrow_mut().insert(token.lexeme.clone(), true);
+        self.define_str(token.lexeme.clone().as_str())
+    }
+    fn define_str(&self, name: &str) {
+        if let Some(scope) = self.scopes.borrow().last() {
+            scope.borrow_mut().insert(name.to_string(), true);
         }
     }
     fn resolve_local(&self, expr_id: usize, name: &Token) {
+        self.resolve_local_str(expr_id, &name.lexeme.clone())
+    }
+    fn resolve_local_str(&self, expr_id: usize, name: &str) {
         let scopes = self.scopes.borrow();
         let count = scopes.len();
-        let name = name.lexeme.clone();
         for (i, scope) in scopes.iter().enumerate().rev() {
-            if scope.borrow().contains_key(&name) {
-                self.locals.borrow_mut().insert(expr_id, count - 1 - i);
+            if scope.borrow().contains_key(name) {
+                self.interpreter
+                    .locals
+                    .borrow_mut()
+                    .insert(expr_id, count - 1 - i);
                 return;
             }
         }
     }
-    fn resolve_function(&self, stmt: &FunctionStmt) {
+    fn resolve_function(&self, stmt: &FunctionStmt, t: FunctionType) -> LoxResult<()> {
+        let enclosing_function = self.current_function.replace(t);
         self.begin_scope();
         for token in stmt.params.iter() {
-            self.declare(&token);
-            self.define(&token);
+            self.declare(token)?;
+            self.define(token);
         }
+        self.resolve_all(stmt.body.to_vec())?;
         self.end_scope();
-    }
-    fn error(&self, code: ParserErrorCode, token: &Token) -> LoxError {
-        LoxError::Parser(ParserError {
-            code,
-            token: token.clone(),
-            next_token: None,
-        })
+        self.current_function.replace(enclosing_function);
+        Ok(())
     }
 }
 
-impl ExprVisitor<()> for Resolver {
+impl<'a> ExprVisitor<()> for Resolver<'a> {
     fn visit_assign_expr(&self, expr: &AssignExpr) -> Result<(), LoxError> {
         expr.value.accept(self)?;
         self.resolve_local(expr.id, &expr.name);
@@ -107,7 +135,7 @@ impl ExprVisitor<()> for Resolver {
         expr.expression.accept(self)
     }
 
-    fn visit_literal_expr(&self, expr: &LiteralExpr) -> Result<(), LoxError> {
+    fn visit_literal_expr(&self, _expr: &LiteralExpr) -> Result<(), LoxError> {
         Ok(())
     }
 
@@ -123,15 +151,41 @@ impl ExprVisitor<()> for Resolver {
     fn visit_var_expr(&self, expr: &ast::VarExpr) -> Result<(), LoxError> {
         if let Some(last) = self.scopes.borrow().last() {
             if !last.borrow().get(&expr.name.lexeme).unwrap_or(&true) {
-                return Err(self.error(ParserErrorCode::InitVarWithUnassignedVar, &expr.name));
+                return Err(self
+                    .interpreter
+                    .error(expr.span, InterpreterErrorCode::InitVarWithUnassignedVar));
             }
         }
         self.resolve_local(expr.id, &expr.name);
         Ok(())
     }
+
+    fn visit_get_expr(&self, expr: &ast::GetExpr) -> Result<(), LoxError> {
+        expr.object.accept(self)
+    }
+
+    fn visit_set_expr(&self, expr: &ast::SetExpr) -> Result<(), LoxError> {
+        expr.value.accept(self)?;
+        expr.object.accept(self)
+    }
+
+    fn visit_this_expr(&self, expr: &ast::ThisExpr) -> Result<(), LoxError> {
+        self.resolve_local_str(expr.id, "this");
+        Ok(())
+    }
+
+    fn visit_super_expr(&self, expr: &ast::SuperExpr) -> Result<(), LoxError> {
+        if matches!(*self.current_class.borrow(), ClassType::None) {
+            return Err(self.interpreter.error(expr.span, InterpreterErrorCode::SuperOutsideClass));
+        } else if matches!(*self.current_class.borrow(), ClassType::Class) {
+            return Err(self.interpreter.error(expr.span, InterpreterErrorCode::SuperOutsideSuperclass));
+        }
+        self.resolve_local_str(expr.id, "super");
+        Ok(())
+    }
 }
 
-impl StmtVisitor<()> for Resolver {
+impl<'a> StmtVisitor<()> for Resolver<'a> {
     fn visit_block_stmt(&self, stmt: &ast::BlockStmt) -> Result<(), LoxError> {
         self.begin_scope();
         self.resolve_all(stmt.statements.to_vec())?;
@@ -144,9 +198,9 @@ impl StmtVisitor<()> for Resolver {
     }
 
     fn visit_function_stmt(&self, stmt: &ast::FunctionStmt) -> Result<(), LoxError> {
-        self.declare(&stmt.name);
+        self.declare(&stmt.name)?;
         self.define(&stmt.name);
-        self.resolve_function(stmt);
+        self.resolve_function(stmt, FunctionType::Function)?;
         Ok(())
     }
 
@@ -164,14 +218,25 @@ impl StmtVisitor<()> for Resolver {
     }
 
     fn visit_return_stmt(&self, stmt: &ast::ReturnStmt) -> Result<(), LoxError> {
+        let current_func = self.current_function.borrow();
+        if matches!(*current_func, FunctionType::None) {
+            return Err(self
+                .interpreter
+                .error(stmt.span, InterpreterErrorCode::ReturnOutsideFunction));
+        }
         if let Some(expr) = &stmt.expression {
+            if matches!(*current_func, FunctionType::Initializer) {
+                return Err(self
+                    .interpreter
+                    .error(stmt.span, InterpreterErrorCode::ReturnInsideConstructor));
+            }
             expr.accept(self)?;
         }
         Ok(())
     }
 
     fn visit_var_stmt(&self, stmt: &ast::VarStmt) -> Result<(), LoxError> {
-        self.declare(&stmt.name);
+        self.declare(&stmt.name)?;
         if let Some(init) = &stmt.initializer {
             init.accept(self)?;
         }
@@ -183,6 +248,46 @@ impl StmtVisitor<()> for Resolver {
         stmt.predicate.accept(self)?;
         stmt.body.accept(self)
     }
+
+    fn visit_class_stmt(&self, stmt: &ast::ClassStmt) -> Result<(), LoxError> {
+        let enclosing_class_type = self.current_class.replace(ClassType::Class);
+        self.declare(&stmt.name)?;
+        self.define(&stmt.name);
+        let mut has_superclass = false;
+        if let Some(superclass) = &stmt.superclass {
+            if stmt.name.lexeme == superclass.name.lexeme {
+                return Err(self.interpreter.error(
+                    superclass.name.span,
+                    InterpreterErrorCode::ParentClassIsChildClass,
+                ));
+            }
+            self.current_class.replace(ClassType::Subclass);
+            has_superclass = true;
+            self.begin_scope();
+            self.define_str("super");
+
+            self.visit_var_expr(&superclass)?;
+        }
+        self.begin_scope();
+        self.define_str("this");
+        for f in stmt.methods.as_ref() {
+            self.resolve_function(
+                &f,
+                if f.name.lexeme == CONSTRUCTOR_NAME {
+                    FunctionType::Initializer
+                } else {
+                    FunctionType::Method
+                },
+            )?;
+        }
+        self.end_scope();
+        
+        if has_superclass {
+            self.end_scope();
+        }
+        self.current_class.replace(enclosing_class_type);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -191,10 +296,11 @@ mod tests {
 
     use crate::ast::Expr;
     use crate::ast::Stmt;
-    use crate::lox_error::LoxError;
-    use crate::lox_error::ParserError;
-    use crate::lox_error::ParserErrorCode;
-    use crate::scanner::token::Span;
+    use crate::interpreter::Interpreter;
+    use crate::error::InterpreterError;
+    use crate::error::InterpreterErrorCode;
+    use crate::error::LoxError;
+    use crate::scanner::span::Span;
     use crate::scanner::token::Token;
     use crate::scanner::token_type::TokenType;
     use crate::scanner::value::Value;
@@ -215,20 +321,17 @@ mod tests {
 
     #[test]
     fn scope() {
-        let resolver = Resolver::new();
+        let interpreter = Interpreter::new();
+        let resolver = Resolver::new(&interpreter);
 
         let outer_init = Some(Rc::new(Expr::new_literal(number(4.0), span())));
         let a_decl = Rc::new(Stmt::new_var(name("a"), outer_init, span()));
 
         let a_read = Rc::new(Expr::new_var(name("a"), span()));
 
-        let a_read_id = a_read.id();
-
         let a_print = Rc::new(Stmt::new_print(a_read, span()));
 
         let a_read_2 = Rc::new(Expr::new_var(name("a"), span()));
-
-        let a_read_2_id = a_read_2.id();
 
         let a_print_2 = Rc::new(Stmt::new_print(a_read_2, span()));
 
@@ -239,13 +342,11 @@ mod tests {
         let result = ast.accept(&resolver);
 
         assert!(result.is_ok());
-
-        println!("{:?}", resolver.get_depth(a_read_id));
-        println!("{:?}", resolver.get_depth(a_read_2_id));
     }
     #[test]
     fn read_self_before_define() {
-        let resolver = Resolver::new();
+        let interpreter = Interpreter::new();
+        let resolver = Resolver::new(&interpreter);
 
         let a_read = Rc::new(Expr::new_var(name("a"), span()));
 
@@ -266,6 +367,12 @@ mod tests {
         let result = ast.accept(&resolver);
 
         assert!(result.is_err());
-        assert!(matches!(result.expect_err(""), LoxError::Parser(ParserError { code: ParserErrorCode::InitVarWithUnassignedVar, token: _, next_token: _ })))
+        assert!(matches!(
+            result.expect_err(""),
+            LoxError::Interpreter(InterpreterError {
+                code: InterpreterErrorCode::InitVarWithUnassignedVar,
+                span: _
+            })
+        ))
     }
 }

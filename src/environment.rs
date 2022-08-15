@@ -1,19 +1,17 @@
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::error::LoxResult;
 use crate::scanner::token::Token;
 use crate::scanner::value::Value;
-
-type Link = Option<Rc<RefCell<Environment>>>;
 
 #[derive(Clone, Debug)]
 pub struct Environment {
     values: HashMap<String, Value>,
-    enclosing: Link,
+    enclosing: Option<Rc<RefCell<Environment>>>,
 }
 
 impl Environment {
@@ -41,21 +39,45 @@ impl Environment {
             None
         }
     }
+    pub fn get_at(&self, name: &str, depth: usize) -> LoxResult<Value> {
+        if depth == 0 {
+            Ok(self.values.get(name).expect("Cannot fail here").clone())
+        } else {
+            self.enclosing
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .get_at(name, depth - 1)
+        }
+    }
     pub fn assign(&mut self, name: &Token, value: Value) -> bool {
         if let Entry::Occupied(mut val) = self.values.entry(name.as_string()) {
             val.insert(value);
-            return true;
+            true
         } else if let Some(enclosing) = &self.enclosing {
-            return enclosing.borrow_mut().assign(name, value);
+            enclosing.borrow_mut().assign(name, value)
         } else {
-            return false;
+            false
+        }
+    }
+    pub fn assign_at(&mut self, name: &str, value: Value, depth: usize) {
+        if depth == 0 {
+            self.values.insert(name.to_string(), value);
+        } else {
+            self.enclosing
+                .as_ref()
+                .unwrap()
+                .borrow_mut()
+                .assign_at(name, value, depth - 1);
         }
     }
 }
 
 impl fmt::Display for Environment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.values.iter().try_for_each(|(name, value)| writeln!(f, "> {} => {}", name, value))?;
+        self.values
+            .iter()
+            .try_for_each(|(name, value)| writeln!(f, "> {} => {}", name, value))?;
         if let Some(enc) = &self.enclosing {
             writeln!(f, ">  |")?;
             writeln!(f, ">  v")?;
@@ -72,7 +94,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::environment::Environment;
-    use crate::scanner::token::Span;
+    use crate::scanner::span::Span;
     use crate::scanner::token::Token;
     use crate::scanner::token_type::TokenType;
     use crate::scanner::value::Value;
