@@ -29,13 +29,18 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant(chunk, offset + 1)?;
                 offset + 2
             }
-            OpCode::DefineGlobal | OpCode::GlobalGet |OpCode::GlobalSet => {
+            OpCode::DefineGlobal | OpCode::GlobalGet | OpCode::GlobalSet => {
                 print_variable(chunk, offset + 1)?;
                 offset + 2
             }
             OpCode::ConstantLong => {
                 print_constant_long(chunk, offset + 1)?;
                 offset + 4
+            }
+            OpCode::Popn | OpCode::LocalGet | OpCode::LocalSet => {
+                let n = get_byte(chunk, offset + 1)?;
+                print!("{}", n.to_string().bright_green());
+                offset + 2
             }
             OpCode::Negate
             | OpCode::Add
@@ -51,6 +56,15 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::Print
             | OpCode::Pop
             | OpCode::False => offset + 1,
+            OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop => {
+                let n1 = get_byte(chunk, offset + 1)?;
+                let n2 = get_byte(chunk, offset + 2)?;
+
+                let n = u16::from(n1) << 8 | u16::from(n2);
+
+                print!("{}", n.to_string().bright_green());
+                offset + 3
+            }
         };
         println!("");
         Ok(new_offset)
@@ -70,13 +84,17 @@ fn print_value(value: Value) {
     print!("{}", format!("{:?}", value).bright_yellow())
 }
 
-fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
-    let constant_addr = chunk.get_at(index).ok_or_else(|| {
+fn get_byte(chunk: &Chunk, index: usize) -> LoxResult<u8> {
+    chunk.get_at(index).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
             code: RuntimeErrorCode::OutOfChunkBounds,
             addr: index,
         })
-    })?;
+    })
+}
+
+fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
+    let constant_addr = get_byte(chunk, index)?;
     chunk.get_constant(constant_addr as usize).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
             code: RuntimeErrorCode::OutOfConstantsBounds,

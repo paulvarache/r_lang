@@ -163,7 +163,21 @@ impl Demistify for ParserError {
             ParserErrorCode::MissingIdentiferAfterSuperDot => format!(
                 "expected identifier after super.{}",
                 self.demistify_next_token()
-            ), // c => format!("missing error demistifyer for {}", c as u32),
+            ),
+            ParserErrorCode::TooManyLocals => format!(
+                "could not define local variable '{}', too many already defined",
+                self.token.demistify()
+            ),
+            ParserErrorCode::LocalAlreadyDefined => format!(
+                "could not define local variable '{}', a variable with this name already exists in this scope",
+                self.token.demistify()
+            ),
+            ParserErrorCode::ReadOwnLocalBeforeInitialized => format!(
+                "could not read local variable '{}', this variable is not initialized yet",
+                self.token.demistify()
+            ),
+            ParserErrorCode::MissingClosingParenAfterIfPredicate => format!("expected ')' after if predicate,{}", self.demistify_next_token()),
+            ParserErrorCode::JumpTooLong => "jump is too long".to_string(), // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }
@@ -423,7 +437,7 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.error(ParserErrorCode::UnterminatedIfPredicate))?;
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingOpenParenAfterIfKeyword,
+            ParserErrorCode::MissingClosingParenAfterIfPredicate,
         )?;
         let then_branch = self
             .statement()?

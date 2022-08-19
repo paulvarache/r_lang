@@ -22,6 +22,9 @@ impl Chunk {
     pub fn write(&mut self, byte: u8) {
         self.code.push(byte)
     }
+    pub fn write_at(&mut self, addr: usize, byte: u8) {
+        self.code[addr] = byte;
+    }
     pub fn write_u24(&mut self, n: u32) {
         let bytes = n.to_le_bytes();
         self.write_n(&[bytes[0], bytes[1], bytes[2]]);

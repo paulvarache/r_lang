@@ -62,6 +62,11 @@ pub enum ParserErrorCode {
     MissingSuperclassName,
     MissingDotAfterSuperKeyword,
     MissingIdentiferAfterSuperDot,
+    TooManyLocals,
+    LocalAlreadyDefined,
+    ReadOwnLocalBeforeInitialized,
+    MissingClosingParenAfterIfPredicate,
+    JumpTooLong,
 }
 
 #[derive(Copy, Clone, Debug)]

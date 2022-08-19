@@ -7,3 +7,4 @@ pub mod sourcemap;
 pub mod value;
 pub mod vm;
 pub mod compiler;
+mod local;

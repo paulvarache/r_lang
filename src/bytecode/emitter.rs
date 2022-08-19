@@ -9,6 +9,7 @@ pub trait Emit {
     fn emit(&mut self, byte: u8, span: Span);
     fn emit_constant(&mut self, value: Value, span: Span);
     fn make_constant(&mut self, value: Value) -> u8;
+    fn patch(&mut self, addr: usize, byte: u8);
     fn get_chunk(&self) -> Box<Chunk>;
     fn locate_byte(&self, addr: usize) -> Option<Span>;
 }
@@ -52,5 +53,9 @@ impl Emit for Emitter {
 
     fn make_constant(&mut self, value: Value) -> u8 {
         self.chunk.add_constant(value)
+    }
+
+    fn patch(&mut self, addr: usize, byte: u8) {
+        self.chunk.write_at(addr, byte);
     } 
 }

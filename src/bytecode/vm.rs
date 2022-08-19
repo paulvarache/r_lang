@@ -4,6 +4,7 @@ use colored::Colorize;
 
 use crate::bytecode::chunk::Chunk;
 use crate::bytecode::debug::disassemble_chunk_instruction;
+use crate::bytecode::local;
 use crate::bytecode::opcode::OpCode;
 use crate::bytecode::value::Value;
 use crate::error::LoxError;
@@ -57,7 +58,7 @@ impl VM {
             {
                 let _ = disassemble_chunk_instruction(chunk, self.ip);
             }
-            let op: OpCode = chunk.get_at(self.read_byte()).unwrap().into();
+            let op: OpCode = chunk.get_at(self.advance()).unwrap().into();
             match op {
                 OpCode::Constant => {
                     let value = self.read_constant(chunk)?;
@@ -124,14 +125,16 @@ impl VM {
                     self.push(Value::Bool(&left < &right));
                 }
                 OpCode::Print => println!("{:?}", self.pop()),
-                OpCode::Pop => { self.pop(); },
+                OpCode::Pop => {
+                    self.pop();
+                }
                 OpCode::DefineGlobal => {
                     let value = self.read_constant(&chunk)?;
                     if let Value::String(name) = value {
                         let p = self.pop();
                         self.globals.insert(name, p.clone());
                     }
-                },
+                }
                 OpCode::GlobalGet => {
                     let name = self.read_constant(&chunk)?;
                     if let Value::String(name) = name {
@@ -141,7 +144,7 @@ impl VM {
                             return Err(self.error(RuntimeErrorCode::UndefinedGlobal));
                         }
                     }
-                },
+                }
                 OpCode::GlobalSet => {
                     let name = self.read_constant(&chunk)?;
                     if let Value::String(name) = name {
@@ -151,6 +154,38 @@ impl VM {
                         let value = self.peek(0);
                         self.globals.insert(name, value.clone());
                     }
+                }
+                OpCode::Popn => {
+                    let n = self.read_byte(chunk)?;
+                    self.stack
+                        .truncate(self.stack.len().saturating_sub(n as usize));
+                }
+                OpCode::LocalGet => {
+                    let local_addr = self.read_byte(chunk)?;
+
+                    self.push(self.stack[local_addr as usize].clone());
+                }
+                OpCode::LocalSet => {
+                    let local_addr = self.read_byte(chunk)?;
+
+                    self.stack[local_addr as usize] = self.peek(0).clone();
+                }
+                OpCode::JumpIfFalse => {
+                    let offset = self.read_short(chunk)?;
+
+                    if self.peek(0).is_falsey() {
+                        self.ip += offset as usize;
+                    }
+                }
+                OpCode::Jump => {
+                    let offset = self.read_short(chunk)?;
+
+                    self.ip += offset as usize;
+                }
+                OpCode::Loop => {
+                    let offset = self.read_short(chunk)?;
+
+                    self.ip -= offset as usize;
                 }
             }
             #[cfg(feature = "debug_trace_execution")]
@@ -176,21 +211,30 @@ impl VM {
         }
         println!("{:=^32}", "".to_string());
     }
-    fn read_byte(&mut self) -> usize {
+    fn advance(&mut self) -> usize {
         let res = self.ip;
         self.ip += 1;
         res
     }
+    fn read_byte(&mut self, chunk: &Chunk) -> LoxResult<u8> {
+        chunk
+            .get_at(self.advance())
+            .ok_or_else(|| self.error(RuntimeErrorCode::OutOfChunkBounds))
+    }
+    fn read_short(&mut self, chunk: &Chunk) -> LoxResult<u16> {
+        let n1 = self.read_byte(chunk)?;
+        let n2 = self.read_byte(chunk)?;
+
+        Ok(u16::from(n1) << 8 | u16::from(n2))
+    }
     fn read_constant(&mut self, chunk: &Chunk) -> LoxResult<Value> {
-        let constant_addr = chunk
-            .get_at(self.read_byte())
-            .ok_or_else(|| self.error(RuntimeErrorCode::OutOfChunkBounds))?;
+        let constant_addr = self.read_byte(chunk)?;
         chunk
             .get_constant(constant_addr as usize)
             .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
     }
     fn read_constant_long(&mut self, chunk: &Chunk) -> LoxResult<Value> {
-        let constant_addr = chunk.get_constant_long_addr(self.read_byte())?;
+        let constant_addr = chunk.get_constant_long_addr(self.advance())?;
         self.ip += 2;
         chunk
             .get_constant(constant_addr as usize)

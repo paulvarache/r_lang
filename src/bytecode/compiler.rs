@@ -9,6 +9,7 @@ use crate::scanner::Scan;
 
 use super::chunk::Chunk;
 use super::emitter::Emit;
+use super::local::Local;
 use super::opcode::OpCode;
 use super::precedence::Precedence;
 use super::value::Value;
@@ -27,6 +28,8 @@ pub struct Compiler<'a> {
     next: Option<Token>,
     pub scanner: Box<dyn Scan + 'a>,
     pub emitter: Box<dyn Emit + 'a>,
+    locals: Vec<Local>,
+    scope_depth: usize,
 }
 
 macro_rules! binary_rule {
@@ -66,6 +69,8 @@ impl<'a> Compiler<'a> {
             last: Token::default(),
             scanner,
             emitter,
+            locals: Vec::new(),
+            scope_depth: 0,
         }
     }
     pub fn compile(&mut self) -> LoxResult<Box<Chunk>> {
@@ -163,7 +168,11 @@ impl<'a> Compiler<'a> {
             TokenType::For => todo!(),
             TokenType::If => todo!(),
             TokenType::Nil => literal_rule!(),
-            TokenType::Or => todo!(),
+            TokenType::Or => ParseRule {
+                prefix: None,
+                infix: Some(Compiler::or),
+                precedence: Precedence::Or,
+            },
             TokenType::Print => todo!(),
             TokenType::Return => todo!(),
             TokenType::Super => todo!(),
@@ -213,9 +222,21 @@ impl<'a> Compiler<'a> {
     fn parse_variable(&mut self, code: ParserErrorCode) -> LoxResult<(u8, Span)> {
         let name = self.consume(TokenType::Identifier, code)?;
 
+        self.declare_variable(&name)?;
+
+        if self.scope_depth > 0 {
+            return Ok((0, Span::new(0, 0, 0, 0)));
+        }
+
         Ok((self.identifer_constant(&name), name.span))
     }
     fn define_variable(&mut self, const_addr: u8, keyword_span: Span, name_span: Span) {
+        if self.scope_depth > 0 {
+            if let Some(local) = self.locals.last_mut() {
+                local.initialize(self.scope_depth);
+            }
+            return;
+        }
         self.emit(OpCode::DefineGlobal.into(), keyword_span);
         self.emit(const_addr, name_span)
     }
@@ -223,15 +244,27 @@ impl<'a> Compiler<'a> {
         self.named_variable(&self.last.clone(), can_assign)
     }
     fn named_variable(&mut self, name: &Token, can_assign: bool) -> LoxResult<()> {
-        let addr = self.identifer_constant(&name);
+        let get_op;
+        let set_op;
+        let addr: u8;
+        let arg = self.resolve_local(name)?;
+        if let Some(arg) = arg {
+            addr = arg;
+            get_op = OpCode::LocalGet;
+            set_op = OpCode::LocalSet;
+        } else {
+            addr = self.identifer_constant(&name);
+            get_op = OpCode::GlobalGet;
+            set_op = OpCode::GlobalSet;
+        }
         let token = self.peek()?;
         if can_assign && token.ttype == TokenType::Equal {
             self.skip()?;
             self.expression()?;
-            self.emit(OpCode::GlobalSet.into(), token.span);
+            self.emit(set_op.into(), token.span);
             self.emit(addr, name.span);
         } else {
-            self.emit_bytes(OpCode::GlobalGet.into(), addr, name.span);
+            self.emit_bytes(get_op.into(), addr, name.span);
         }
         Ok(())
     }
@@ -250,8 +283,26 @@ impl<'a> Compiler<'a> {
         let token = self.peek()?;
         match token.ttype {
             TokenType::Print => self.print_statement(),
+            TokenType::If => self.if_statement(),
+            TokenType::While => self.while_statement(),
+            TokenType::For => self.for_statement(),
+            TokenType::OpenBrace => {
+                self.skip()?;
+                self.begin_scope();
+                self.block()?;
+                self.end_scope();
+                Ok(())
+            }
             _ => self.expression_statement(),
         }
+    }
+    // block -> "{" declaration* "}" ;
+    fn block(&mut self) -> LoxResult<()> {
+        while self.peek()?.ttype != TokenType::CloseBrace {
+            self.declaration()?;
+        }
+        self.consume(TokenType::CloseBrace, ParserErrorCode::UnterminatedBlock)?;
+        Ok(())
     }
     fn print_statement(&mut self) -> LoxResult<()> {
         let print_token = self.advance()?;
@@ -261,6 +312,109 @@ impl<'a> Compiler<'a> {
             ParserErrorCode::MissingSemicolonAfterPrintStatement,
         )?;
         self.emit(OpCode::Print.into(), print_token.span);
+        Ok(())
+    }
+    fn if_statement(&mut self) -> LoxResult<()> {
+        let if_token = self.advance()?;
+        self.consume(
+            TokenType::OpenParen,
+            ParserErrorCode::MissingOpenParenAfterIfKeyword,
+        )?;
+        self.expression()?;
+        self.consume(
+            TokenType::CloseParen,
+            ParserErrorCode::MissingClosingParenAfterIfPredicate,
+        )?;
+
+        let then_jump = self.emit_jump(OpCode::JumpIfFalse, if_token.span);
+        self.emit(OpCode::Pop.into(), if_token.span);
+        self.statement()?;
+        let else_jump = self.emit_jump(OpCode::Jump, if_token.span);
+        self.patch_jump(then_jump)?;
+        self.emit(OpCode::Pop.into(), if_token.span);
+        if self.peek()?.ttype == TokenType::Else {
+            self.skip()?;
+            self.statement()?;
+        }
+        self.patch_jump(else_jump)?;
+
+        Ok(())
+    }
+    fn while_statement(&mut self) -> LoxResult<()> {
+        let loop_start = self.emitter.get_chunk().len();
+        let while_token = self.advance()?;
+        self.consume(
+            TokenType::OpenParen,
+            ParserErrorCode::MissingOpenParenAfterWhileKeyword,
+        )?;
+        self.expression()?;
+        self.consume(
+            TokenType::CloseParen,
+            ParserErrorCode::MissingClosingParenAfterWhilePredicate,
+        )?;
+
+        let exit_jump = self.emit_jump(OpCode::JumpIfFalse, while_token.span);
+        self.emit(OpCode::Pop.into(), while_token.span);
+        self.statement()?;
+        self.emit_loop(loop_start, while_token.span)?;
+
+        self.patch_jump(exit_jump)?;
+        self.emit(OpCode::Pop.into(), while_token.span);
+
+        Ok(())
+    }
+    fn for_statement(&mut self) -> LoxResult<()> {
+        let for_token = self.advance()?;
+        self.begin_scope();
+        self.consume(
+            TokenType::OpenParen,
+            ParserErrorCode::MissingOpenParenAfterWhileKeyword,
+        )?;
+        match self.peek()?.ttype {
+            TokenType::Semicolon => {}
+            TokenType::Var => self.var_declaration()?,
+            _ => self.expression()?,
+        }
+
+        let mut loop_start = self.emitter.get_chunk().len();
+
+        let mut exit_jump = None;
+
+        if self.peek()?.ttype != TokenType::Semicolon {
+            self.expression()?;
+            self.consume(
+                TokenType::Semicolon,
+                ParserErrorCode::MissingSemicolonAfterForIteration,
+            )?;
+
+            exit_jump = Some(self.emit_jump(OpCode::JumpIfFalse, for_token.span));
+            self.emit(OpCode::Pop.into(), for_token.span);
+        }
+
+        if self.peek()?.ttype != TokenType::CloseParen {
+            let body_jump = self.emit_jump(OpCode::Jump, for_token.span);
+            let increment_start = self.emitter.get_chunk().len();
+            self.expression()?;
+            self.emit(OpCode::Pop.into(), for_token.span);
+            self.consume(
+                TokenType::CloseParen,
+                ParserErrorCode::MissingClosingParenAfterFor,
+            )?;
+
+            self.emit_loop(loop_start, for_token.span)?;
+            loop_start = increment_start;
+            self.patch_jump(body_jump)?;
+        }
+
+        self.statement()?;
+        self.emit_loop(loop_start, for_token.span)?;
+
+        if let Some(exit_jump) = exit_jump {
+            self.patch_jump(exit_jump)?;
+            self.emit(OpCode::Pop.into(), for_token.span);
+        }
+
+        self.end_scope();
         Ok(())
     }
     fn expression_statement(&mut self) -> LoxResult<()> {
@@ -363,6 +517,19 @@ impl<'a> Compiler<'a> {
 
         Ok(())
     }
+    fn or(&mut self, _can_assign: bool) -> LoxResult<()> {
+        let token = self.last.clone();
+        let else_jump = self.emit_jump(OpCode::JumpIfFalse, token.span);
+        let end_jump = self.emit_jump(OpCode::Jump, token.span);
+
+        self.patch_jump(else_jump)?;
+        self.emit(OpCode::Pop.into(), token.span);
+        self.parse_precedence(Precedence::Or, ParserErrorCode::MissingTermRightHandSide)?;
+
+        self.patch_jump(end_jump)?;
+
+        Ok(())
+    }
     fn number(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = &self.last;
         let f = token.lexeme.parse::<f64>().unwrap(); // Invalid numbers is handled at scan time
@@ -420,5 +587,109 @@ impl<'a> Compiler<'a> {
             next_token: next_token.clone(),
             code,
         })
+    }
+
+    fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        let mut n: u8 = 0;
+
+        // Count how many are in the current depth
+        for i in (0..self.locals.len()).rev() {
+            if let Some(depth) = self.locals[i].depth {
+                if depth < self.scope_depth {
+                    break;
+                }
+            } else {
+                break;
+            }
+            n += 1;
+        }
+
+        // Don't emit the extra POPN if there is nothing to pop
+        if n != 0 {
+            // Pop that many
+            self.emit(OpCode::Popn.into(), self.last.span);
+            self.emit(n, self.last.span);
+        }
+
+        // Remove the locals
+        self.locals
+            .truncate(self.locals.len().saturating_sub(n as usize));
+        self.scope_depth -= 1;
+    }
+
+    fn declare_variable(&mut self, name: &Token) -> LoxResult<()> {
+        if self.scope_depth == 0 {
+            return Ok(());
+        }
+        for local in self.locals.iter().rev() {
+            if let Some(depth) = local.depth {
+                if depth < self.scope_depth {
+                    break;
+                }
+            }
+
+            if local.name.lexeme == name.lexeme {
+                return Err(self.error(ParserErrorCode::LocalAlreadyDefined));
+            }
+        }
+        self.add_local(name)
+    }
+
+    fn add_local(&mut self, name: &Token) -> LoxResult<()> {
+        if self.locals.len() == u8::MAX.into() {
+            return Err(self.error(ParserErrorCode::TooManyLocals));
+        }
+        self.locals.push(Local::new(name));
+        Ok(())
+    }
+
+    fn resolve_local(&mut self, name: &Token) -> LoxResult<Option<u8>> {
+        for i in (0..self.locals.len()).rev() {
+            let local = &self.locals[i];
+            if local.name.lexeme == name.lexeme {
+                if local.depth.is_none() {
+                    return Err(self.error(ParserErrorCode::ReadOwnLocalBeforeInitialized));
+                }
+                return Ok(Some(i as u8));
+            }
+        }
+        Ok(None)
+    }
+
+    fn emit_jump(&mut self, opcode: OpCode, span: Span) -> usize {
+        self.emit(opcode.into(), span);
+        self.emit(0xFF, span);
+        self.emit(0xFF, span);
+
+        self.emitter.get_chunk().len() - 2
+    }
+
+    fn patch_jump(&mut self, addr: usize) -> LoxResult<()> {
+        let jump = (self.emitter.get_chunk().len() - addr - 2) as u16;
+
+        if jump > u16::MAX {
+            return Err(self.error(ParserErrorCode::JumpTooLong));
+        }
+
+        self.emitter.patch(addr, (jump >> 8) as u8 & 0xFF);
+        self.emitter.patch(addr + 1, jump as u8 & 0xFF);
+        Ok(())
+    }
+
+    fn emit_loop(&mut self, addr: usize, span: Span) -> LoxResult<()> {
+        self.emit(OpCode::Loop.into(), span);
+
+        let offset = (self.emitter.get_chunk().len() - addr + 2) as u16;
+        if offset > u16::MAX {
+            return Err(self.error(ParserErrorCode::JumpTooLong));
+        }
+
+        self.emit((offset >> 8) as u8 & 0xFF, span);
+        self.emit(offset as u8 & 0xFF, span);
+        Ok(())
     }
 }

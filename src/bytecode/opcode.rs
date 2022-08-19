@@ -20,7 +20,13 @@ pub enum OpCode {
     Return,
     Print,
     Pop,
+    Popn,
     DefineGlobal,
     GlobalGet,
     GlobalSet,
+    LocalGet,
+    LocalSet,
+    JumpIfFalse,
+    Jump,
+    Loop,
 }
