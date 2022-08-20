@@ -67,6 +67,7 @@ pub enum ParserErrorCode {
     ReadOwnLocalBeforeInitialized,
     MissingClosingParenAfterIfPredicate,
     JumpTooLong,
+    TopLevelReturn,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -101,6 +102,8 @@ pub enum RuntimeErrorCode {
     UnaryMinusInvalidType,
     NumberBinaryExprOperandsIncorrectType,
     UndefinedGlobal,
+    CallNonFunctionValue,
+    FunctionCallArityMismatch,
 }
 
 #[derive(Debug)]
@@ -172,6 +175,7 @@ impl Demistify for CompilerError {
 #[derive(Debug)]
 pub struct RuntimeError {
     pub addr: usize,
+    pub func_id: usize,
     pub code: RuntimeErrorCode,
 }
 impl Demistify for RuntimeError {
@@ -182,6 +186,8 @@ impl Demistify for RuntimeError {
             RuntimeErrorCode::UnaryMinusInvalidType => "'-' operand only accepts numbers".to_string(),
             RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType => "incompatible types".to_string(),
             RuntimeErrorCode::UndefinedGlobal => "undefined global variable".to_string(),
+            RuntimeErrorCode::CallNonFunctionValue => "can only call functions".to_string(),
+            RuntimeErrorCode::FunctionCallArityMismatch => "function call mismatch arity".to_string(),
         }
     }
 }

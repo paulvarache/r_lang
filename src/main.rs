@@ -22,26 +22,22 @@ mod parser;
 mod resolver;
 mod scanner;
 
-use bytecode::chunk::Chunk;
-use bytecode::debug::disassemble_chunk;
-use bytecode::emitter;
-use bytecode::emitter::Emitter;
-use bytecode::sourcemap::Sourcemap;
-use bytecode::vm::VM;
+use bytecode::call_frame::CallFrame;
 use bytecode::compiler::Compiler;
+use bytecode::vm::VM;
 use colored::Colorize;
 use error::LoxError;
-use parser::Parser;
-use resolver::Resolver;
-use scanner::Scan;
-use scanner::span::Span;
 use stringreader::StringReader;
 
+use crate::bytecode::debug::disassemble_chunk;
+use crate::bytecode::debug::disassemble_chunk_instruction;
 use crate::interpreter::Interpreter;
+use crate::scanner::span::Span;
 use crate::scanner::Scanner;
 
 pub struct Lox {
     interpreter: Interpreter,
+    vm: VM,
 }
 
 impl Default for Lox {
@@ -54,9 +50,10 @@ impl Lox {
     pub fn new() -> Self {
         Self {
             interpreter: Interpreter::new(),
+            vm: VM::new(),
         }
     }
-    pub fn run_promt(&self) {
+    pub fn run_promt(&mut self) {
         let stdin = io::stdin();
         print!("> ");
         stdout().flush().expect("Could not flush stdout");
@@ -73,7 +70,7 @@ impl Lox {
         }
     }
 
-    pub fn run_file(&self, path: &str) -> io::Result<()> {
+    pub fn run_file(&mut self, path: &str) -> io::Result<()> {
         let f = File::open(path)?;
         let reader = BufReader::new(f);
         if self.run(Box::new(reader)) {
@@ -86,26 +83,28 @@ impl Lox {
         print!("Usage: lox <src>");
         process::exit(64);
     }
-    fn run<'a>(&self, reader: Box<dyn io::Read + 'a>) -> bool {
+    fn run<'a>(&mut self, reader: Box<dyn io::Read + 'a>) -> bool {
         #[cfg(feature = "use_bytecode")]
         {
             let scanner = Scanner::new(reader);
 
-            let emitter = Emitter::new();
-            let mut compiler = Compiler::new(Box::new(scanner), Box::new(emitter));
+            let mut compiler = Compiler::new(Box::new(scanner));
 
-            let chunk = compiler.compile();
+            let result = compiler.compile();
 
-            
             let mut error = None;
-            
-            match chunk {
-                Ok(chunk) => {
-                    let mut vm = VM::new();
 
-                    match vm.run(chunk.as_ref()) {
-                        Ok(_) => {}
-                        Err(e) => error = Some(e),
+            match result {
+                Ok(function) => {
+                    let res = self.vm.call(&Rc::new(function), 0);
+
+                    if let Err(err) = res {
+                        error = Some(err);
+                    } else {
+                        match self.vm.run() {
+                            Ok(_) => {}
+                            Err(e) => error = Some(e),
+                        }
                     }
                 }
                 Err(e) => error = Some(e),
@@ -124,8 +123,20 @@ impl Lox {
                         println!("{}", compiler.scanner.format_error_loc(err.span));
                     }
                     LoxError::Runtime(err) => {
-                        let span = compiler.emitter.locate_byte(err.addr).unwrap_or_else(|| Span::default());
+                        let span = compiler
+                            .locate_byte(err.func_id, err.addr)
+                            .unwrap_or_else(|| Span::default());
                         println!("{}", compiler.scanner.format_error_loc(span));
+
+                        for i in (0..self.vm.frames.len() - 1).rev() {
+                            let frame = &self.vm.frames[i];
+                            let span = compiler
+                                .locate_byte(frame.borrow().function.id(), frame.borrow().ip - 1)
+                                .unwrap_or_else(|| Span::default());
+
+                            println!("{}", compiler.scanner.format_backtrace_line(span));
+                        }
+                        // TODO: use vm to extract backtrace
                     }
                     _ => {}
                 }
@@ -209,7 +220,7 @@ impl Lox {
 }
 
 pub fn main() {
-    let lox = Lox::new();
+    let mut lox = Lox::new();
     let args: Vec<String> = env::args().collect();
     match args.len() {
         1 => lox.run_promt(),

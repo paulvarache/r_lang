@@ -177,7 +177,8 @@ impl Demistify for ParserError {
                 self.token.demistify()
             ),
             ParserErrorCode::MissingClosingParenAfterIfPredicate => format!("expected ')' after if predicate,{}", self.demistify_next_token()),
-            ParserErrorCode::JumpTooLong => "jump is too long".to_string(), // c => format!("missing error demistifyer for {}", c as u32),
+            ParserErrorCode::JumpTooLong => "jump is too long".to_string(),
+            ParserErrorCode::TopLevelReturn => "cannot return outside a function".to_string(), // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }
@@ -1007,6 +1008,10 @@ mod tests {
         fn format_error_loc(&self, _span: Span) -> String {
             "".to_string()
         }
+
+        fn format_backtrace_line(&self, span: Span) -> String {
+        todo!()
+    }
     }
 
     fn token(ttype: TokenType) -> Token {

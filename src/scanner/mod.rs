@@ -8,6 +8,8 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 
+use colored::Color;
+use colored::ColoredString;
 use colored::Colorize;
 
 use crate::error::Demistify;
@@ -38,6 +40,7 @@ impl Demistify for ScannerError {
 pub trait Scan {
     fn span(&self) -> Span;
     fn format_error_loc(&self, span: Span) -> String;
+    fn format_backtrace_line(&self, span: Span) -> String;
     fn next(&mut self) -> LoxResult<Option<Token>>;
 }
 
@@ -140,6 +143,32 @@ impl<'a> Scan for Scanner<'a> {
         }
     }
 
+    fn format_backtrace_line(&self, span: Span) -> String {
+        let default = "".to_string();
+        let mut res = Vec::new();
+        let all_lines = span.start.0..(span.end.0 + 1);
+        let max_pad = all_lines.clone().max().unwrap_or(1).to_string().len();
+        for i in all_lines {
+            let line = self.source.get(i - 1).unwrap_or(&default);
+
+            let start_col = if span.start.0 == i { span.start.1 } else { 1 };
+            let end_col = if span.end.0 == i {
+                span.end.1
+            } else {
+                line.len() + 1
+            };
+
+            let line_start = line.chars().take(start_col - 1).collect::<String>();
+            let line_highlight = line.chars().skip(start_col - 1).take(end_col - start_col).collect::<String>();
+            let line_end = line.chars().skip(end_col - 1).collect::<String>();
+
+            let line_prefix = format!("{i:00$} |", max_pad).cyan();
+
+            res.push(format!(" {line_prefix} {}{}{}", line_start.dimmed(), line_highlight, line_end.dimmed()));
+        }
+        res.join("\n")
+    }
+
     fn format_error_loc(&self, span: Span) -> String {
         let default = "".to_string();
         let mut res = Vec::new();
@@ -157,7 +186,8 @@ impl<'a> Scan for Scanner<'a> {
             };
 
             let nil = "";
-            let fill = format!("{nil:0$}{nil:^<1$}{nil:2$}", start_col - 1, end_col - start_col, line.len() - (end_col - 1));
+            let underline = format!("{nil:^<0$}", end_col - start_col).red();
+            let fill = format!("{nil:0$}{underline}{nil:1$}", start_col - 1, line.len() - (end_col - 1));
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
             let underline_prefix = format!("{:01$} |", "", max_pad).cyan();

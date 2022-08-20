@@ -65,6 +65,11 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print!("{}", n.to_string().bright_green());
                 offset + 3
             }
+            OpCode::Call => {
+                let arg_count = get_byte(chunk, offset + 1)?;
+                print!("{} args", arg_count.to_string().bright_green());
+                offset + 2
+            }
         };
         println!("");
         Ok(new_offset)
@@ -81,12 +86,14 @@ fn print_opcode<T: ToString>(name: T) {
 }
 
 fn print_value(value: Value) {
-    print!("{}", format!("{:?}", value).bright_yellow())
+    let formatted = format!("{value}");
+    print!("{}", formatted.bright_yellow())
 }
 
 fn get_byte(chunk: &Chunk, index: usize) -> LoxResult<u8> {
     chunk.get_at(index).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
+            func_id: 0,
             code: RuntimeErrorCode::OutOfChunkBounds,
             addr: index,
         })
@@ -97,6 +104,7 @@ fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
     let constant_addr = get_byte(chunk, index)?;
     chunk.get_constant(constant_addr as usize).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
+            func_id: 0,
             code: RuntimeErrorCode::OutOfConstantsBounds,
             addr: index,
         })
@@ -120,6 +128,7 @@ fn print_constant_long(chunk: &Chunk, index: usize) -> LoxResult<()> {
     let constant_addr = chunk.get_constant_long_addr(index)?;
     let value = chunk.get_constant(constant_addr as usize).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
+            func_id: 0,
             code: RuntimeErrorCode::OutOfChunkBounds,
             addr: index,
         })

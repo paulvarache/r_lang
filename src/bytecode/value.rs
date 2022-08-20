@@ -1,14 +1,22 @@
+use std::fmt::Display;
 use std::ops::Add;
 use std::ops::Div;
 use std::ops::Mul;
 use std::ops::Neg;
 use std::ops::Sub;
+use std::rc::Rc;
+
+use super::function::Function;
+
+pub type NativeFunction = fn(args: Vec<Value>) -> Value;
 
 #[derive(Clone, Debug)]
 pub enum Value {
     String(String),
     Number(f64),
     Bool(bool),
+    Func(Rc<Function>),
+    Native(NativeFunction),
     Nil,
 }
 
@@ -84,6 +92,19 @@ impl PartialOrd for &Value {
         match (self, other) {
             (&Value::Number(a), &Value::Number(b)) => a.partial_cmp(b),
             _ => panic!("Invalid operation")
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number(n) => write!(f, "{n}"),
+            Value::String(s) => write!(f, "\"{s}\""),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Nil => write!(f, "nil"),
+            Value::Func(func) => write!(f, "<fn {}>", func.name()),
+            Value::Native(_) => write!(f, "<native fb>"),
         }
     }
 }

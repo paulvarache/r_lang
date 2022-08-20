@@ -13,3 +13,6 @@ colored = "2.0.0"
 [features]
 debug_trace_execution = []
 use_bytecode = []
+
+[profile.release]
+debug = true

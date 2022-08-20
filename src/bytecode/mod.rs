@@ -1,6 +1,5 @@
 pub mod chunk;
 pub mod debug;
-pub mod emitter;
 mod opcode;
 pub mod precedence;
 pub mod sourcemap;
@@ -8,3 +7,6 @@ pub mod value;
 pub mod vm;
 pub mod compiler;
 mod local;
+pub mod call_frame;
+mod function;
+mod function_compiler;

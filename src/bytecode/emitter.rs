@@ -5,15 +5,7 @@ use super::opcode::OpCode;
 use super::sourcemap::Sourcemap;
 use super::value::Value;
 
-pub trait Emit {
-    fn emit(&mut self, byte: u8, span: Span);
-    fn emit_constant(&mut self, value: Value, span: Span);
-    fn make_constant(&mut self, value: Value) -> u8;
-    fn patch(&mut self, addr: usize, byte: u8);
-    fn get_chunk(&self) -> Box<Chunk>;
-    fn locate_byte(&self, addr: usize) -> Option<Span>;
-}
-
+#[derive(Clone, Debug)]
 pub struct Emitter {
     chunk: Box<Chunk>,
     sourcemaps: Sourcemap,
@@ -31,31 +23,31 @@ impl Emitter {
         self.chunk.write(byte);
         self.sourcemaps.describe_byte(index, span);
     }
-}
-
-impl Emit for Emitter {
-    fn emit(&mut self, byte: u8, span: Span) {
+    pub fn emit(&mut self, byte: u8, span: Span) {
         self.write(byte, span);
     }
 
-    fn emit_constant(&mut self, value: Value, span: Span) {
+    pub fn emit_constant(&mut self, value: Value, span: Span) {
         let const_addr = self.chunk.add_constant(value);
         self.write(OpCode::Constant.into(), span);
         self.write(const_addr, span);
     }
 
-    fn get_chunk(&self) -> Box<Chunk> {
+    pub fn get_chunk(&self) -> Box<Chunk> {
         Box::clone(&self.chunk)
     }
-    fn locate_byte(&self, addr: usize) -> Option<Span> {
+    pub fn locate_byte(&self, addr: usize) -> Option<Span> {
         self.sourcemaps.locate_byte(addr).map(|s| s.clone())
     }
 
-    fn make_constant(&mut self, value: Value) -> u8 {
+    pub fn make_constant(&mut self, value: Value) -> u8 {
         self.chunk.add_constant(value)
     }
 
-    fn patch(&mut self, addr: usize, byte: u8) {
+    pub fn patch(&mut self, addr: usize, byte: u8) {
         self.chunk.write_at(addr, byte);
-    } 
+    }
+    pub fn current_addr(&self) -> usize {
+        self.chunk.len()
+    }
 }

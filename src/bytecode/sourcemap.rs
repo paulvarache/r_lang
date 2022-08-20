@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::scanner::span::Span;
 
+#[derive(Clone, Debug)]
 pub struct Sourcemap {
     spans: HashMap<usize, Span>,
 }

@@ -4,7 +4,7 @@ use crate::error::LoxError;
 use crate::error::LoxResult;
 use crate::error::RuntimeError;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Chunk {
     code: Vec<u8>,
     constants: Vec<Value>,
@@ -69,6 +69,7 @@ impl Chunk {
         for (i, index) in indices.iter().enumerate() {
             values[i] = self.get_at(*index).ok_or_else(|| {
                 LoxError::Runtime(RuntimeError {
+                    func_id: 0,
                     code: crate::error::RuntimeErrorCode::OutOfChunkBounds,
                     addr: *index,
                 })
