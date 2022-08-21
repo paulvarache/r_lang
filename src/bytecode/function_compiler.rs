@@ -3,7 +3,6 @@ use super::function::FunctionType;
 use super::local::Local;
 use super::opcode::OpCode;
 use super::sourcemap::Sourcemap;
-use super::upvalue::Upvalue;
 use crate::error::ParserErrorCode;
 use crate::scanner::span::Span;
 use crate::scanner::token::Token;
@@ -21,7 +20,7 @@ pub struct FunctionCompiler {
     pub sourcemap: Sourcemap,
     pub function_type: FunctionType,
     pub enclosing: Option<Box<FunctionCompiler>>,
-    pub upvalues: Vec<Upvalue>,
+    pub upvalues: Vec<(bool, u8)>,
 }
 
 impl FunctionCompiler {
@@ -78,20 +77,18 @@ impl FunctionCompiler {
             } else {
                 break;
             }
+            if self.locals[i].is_captured {
+                self.emit(OpCode::CloseUpvalue, span);
+            } else {
+                self.emit(OpCode::Pop, span);
+            }
             n += 1;
-        }
-
-        // Don't emit the extra POPN if there is nothing to pop
-        if n != 0 {
-            // Pop that many
-            self.emit(OpCode::Popn, span);
-            self.emit(n, span);
         }
 
         // Remove the locals
         self.locals
             .truncate(self.locals.len().saturating_sub(n as usize));
-        self.scope_depth -= 1;
+        self.scope_depth = self.scope_depth.saturating_sub(1);
     }
 
     pub fn declare_variable(&mut self, name: &Token) -> ParseResult<()> {
@@ -142,6 +139,7 @@ impl FunctionCompiler {
     pub fn resolve_upvalue(&mut self, name: &Token) -> ParseResult<Option<u8>> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(local) = enclosing.resolve_local(name)? {
+                enclosing.locals[local as usize].is_captured = true;
                 return self.add_upvalue(local, true);
             }
             if let Some(addr) = enclosing.resolve_upvalue(name)? {
@@ -155,14 +153,14 @@ impl FunctionCompiler {
 
     fn add_upvalue(&mut self, addr: u8, is_local: bool) -> ParseResult<Option<u8>> {
         for (i, upvalue) in self.upvalues.iter().enumerate() {
-            if upvalue.addr == addr && upvalue.is_local == is_local {
+            if upvalue.1 == addr && upvalue.0 == is_local {
                 return Ok(Some(i as u8));
             }
         }
         if self.upvalues.len() == 255 {
             return Err(ParserErrorCode::TooManyLocals);
         }
-        let upvalue = Upvalue::new(is_local, addr);
+        let upvalue = (is_local, addr);
         let upvalue_addr = self.upvalues.len();
         self.upvalues.push(upvalue);
         Ok(Some(upvalue_addr as u8))

@@ -91,7 +91,12 @@ impl<'a> Compiler<'a> {
             .function_compiler
             .replace(FunctionCompiler::new("__", FunctionType::Script));
 
-        let function = Function::new("__".to_string(), function_compiler.chunk, 0);
+        let function = Function::new(
+            "__".to_string(),
+            function_compiler.chunk,
+            0,
+            function_compiler.upvalues.len() as u8,
+        );
 
         self.sourcemaps
             .insert(function.id(), function_compiler.sourcemap);
@@ -209,10 +214,45 @@ impl<'a> Compiler<'a> {
     //              | statement;
     fn declaration(&mut self) -> LoxResult<()> {
         match self.peek()?.ttype {
+            TokenType::Class => self.class_declaration(),
             TokenType::Fun => self.fun_declaration(),
             TokenType::Var => self.var_declaration(),
             _ => self.statement(),
         }
+    }
+    fn class_declaration(&mut self) -> LoxResult<()> {
+        let class_token = self.advance()?;
+        let name = self.consume(
+            TokenType::Identifier,
+            ParserErrorCode::MissingIdentifierAfterClassKeyword,
+        )?;
+        let class_name_addr = self
+            .function_compiler
+            .borrow_mut()
+            .identifer_constant(&name);
+        let res = self.function_compiler.borrow_mut().declare_variable(&name);
+        if let Err(code) = res {
+            return Err(self.error(code));
+        }
+
+        let span = Span::new_from_range(class_token.span, name.span);
+
+        self.emit_bytes(OpCode::Class, class_name_addr, span);
+
+        self.function_compiler
+            .borrow_mut()
+            .define_variable(class_name_addr, span);
+
+        self.consume(
+            TokenType::OpenBrace,
+            ParserErrorCode::MissingOpenBraceAfterClassName,
+        )?;
+        self.consume(
+            TokenType::CloseBrace,
+            ParserErrorCode::MissingOpenBraceAfterClassDeclaration,
+        )?;
+
+        Ok(())
     }
     fn fun_declaration(&mut self) -> LoxResult<()> {
         let fun_token = self.advance()?;
@@ -232,7 +272,7 @@ impl<'a> Compiler<'a> {
             .function_compiler
             .replace(FunctionCompiler::new(&name.lexeme, function_type));
 
-        mem::replace(
+        self.function_compiler.borrow_mut().enclosing = mem::replace(
             &mut self.function_compiler.borrow_mut().enclosing,
             Some(Box::new(previous)),
         );
@@ -282,9 +322,15 @@ impl<'a> Compiler<'a> {
             .unwrap();
 
         let function_compiler = self.function_compiler.replace(*previous);
+
         let arity = function_compiler.arity();
 
-        let function = Function::new(name.lexeme.clone(), function_compiler.chunk, arity);
+        let function = Function::new(
+            name.lexeme.clone(),
+            function_compiler.chunk,
+            arity,
+            function_compiler.upvalues.len() as u8,
+        );
 
         self.sourcemaps
             .insert(function.id(), function_compiler.sourcemap);
@@ -298,7 +344,7 @@ impl<'a> Compiler<'a> {
         self.emit_bytes(OpCode::Closure, const_addr, span);
 
         for upvalue in &function_compiler.upvalues {
-            self.emit_bytes(if upvalue.is_local { 1 } else { 0 }, upvalue.addr, span);
+            self.emit_bytes(if upvalue.0 { 1 } else { 0 }, upvalue.1, span);
         }
 
         Ok(())

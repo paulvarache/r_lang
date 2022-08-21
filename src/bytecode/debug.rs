@@ -29,11 +29,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant(chunk, offset + 1)?;
                 offset + 2
             }
-            OpCode::DefineGlobal
-            | OpCode::GlobalGet
-            | OpCode::GlobalSet
-            | OpCode::UpvalueGet
-            | OpCode::UpvalueSet => {
+            OpCode::DefineGlobal | OpCode::GlobalGet | OpCode::GlobalSet | OpCode::Class => {
                 print_variable(chunk, offset + 1)?;
                 offset + 2
             }
@@ -41,7 +37,11 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant_long(chunk, offset + 1)?;
                 offset + 4
             }
-            OpCode::Popn | OpCode::LocalGet | OpCode::LocalSet => {
+            OpCode::Popn
+            | OpCode::LocalGet
+            | OpCode::LocalSet
+            | OpCode::UpvalueGet
+            | OpCode::UpvalueSet => {
                 let n = get_byte(chunk, offset + 1)?;
                 print!("{}", n.to_string().bright_green());
                 offset + 2
@@ -59,6 +59,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::Less
             | OpCode::Print
             | OpCode::Pop
+            | OpCode::CloseUpvalue
             | OpCode::False => offset + 1,
             OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop => {
                 let n1 = get_byte(chunk, offset + 1)?;
@@ -76,19 +77,15 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             }
             OpCode::Closure => {
                 let mut i = offset + 1;
-                let const_addr = get_byte(chunk, i)?;
                 let value = get_constant(chunk, i)?;
-                print!("{const_addr} ");
-                if let Value::Closure(closure) = value {
-                    for _ in 0..closure.function.upvalue_count {
-                        let is_local = get_byte(chunk, offset + 1)?;
-                        let addr = get_byte(chunk, offset + 2)?;
-                        print!(
-                            "{:04} | {}: {:04}",
-                            i,
-                            if is_local == 0 { "upvalue" } else { "local" },
-                            addr
-                        );
+                if let Value::Func(function) = value {
+                    print!("{}", format!("<fn {}>", function.name()).bright_yellow());
+                    for _ in 0..function.upvalue_count {
+                        let is_local = get_byte(chunk, i + 1)?;
+                        let addr = get_byte(chunk, i + 2)?;
+                        println!("");
+                        print_offset(i);
+                        print_upvalue(is_local == 1, addr);
                         i += 2;
                     }
                 }
@@ -100,6 +97,15 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
     } else {
         Ok(offset + 1)
     }
+}
+
+fn print_upvalue(is_local: bool, addr: u8) {
+    let nil = "";
+    print!(
+        "|{nil:<23}{}: {:04}",
+        (if is_local { "local" } else { "upvalue" }).yellow(),
+        addr
+    );
 }
 
 fn print_offset(offset: usize) {

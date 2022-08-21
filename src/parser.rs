@@ -178,7 +178,8 @@ impl Demistify for ParserError {
             ),
             ParserErrorCode::MissingClosingParenAfterIfPredicate => format!("expected ')' after if predicate,{}", self.demistify_next_token()),
             ParserErrorCode::JumpTooLong => "jump is too long".to_string(),
-            ParserErrorCode::TopLevelReturn => "cannot return outside a function".to_string(), // c => format!("missing error demistifyer for {}", c as u32),
+            ParserErrorCode::TopLevelReturn => "cannot return outside a function".to_string(),
+            ParserErrorCode::MissingOpenBraceAfterClassDeclaration => format!("expected '}}' after class declaration{}", self.demistify_next_token()), // c => format!("missing error demistifyer for {}", c as u32),
         }
     }
 }

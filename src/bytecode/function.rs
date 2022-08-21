@@ -20,13 +20,13 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn new(name: String, chunk: Chunk, arity: u8) -> Self {
+    pub fn new(name: String, chunk: Chunk, arity: u8, upvalue_count: u8) -> Self {
         Self {
             id: FUNCTION_COUNTER.fetch_add(1, Ordering::SeqCst),
             arity,
             chunk,
             name,
-            upvalue_count: 0,
+            upvalue_count,
         }
     }
     pub fn id(&self) -> usize {

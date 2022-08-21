@@ -1,0 +1,1 @@
+ - Optimise upvalue closing by keeping the opened upvalues in a more efficient data structure

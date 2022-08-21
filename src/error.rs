@@ -68,6 +68,7 @@ pub enum ParserErrorCode {
     MissingClosingParenAfterIfPredicate,
     JumpTooLong,
     TopLevelReturn,
+    MissingOpenBraceAfterClassDeclaration,
 }
 
 #[derive(Copy, Clone, Debug)]

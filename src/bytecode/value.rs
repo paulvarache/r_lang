@@ -6,6 +6,7 @@ use std::ops::Neg;
 use std::ops::Sub;
 use std::rc::Rc;
 
+use super::class::Class;
 use super::closure::Closure;
 use super::function::Function;
 
@@ -19,7 +20,7 @@ pub enum Value {
     Func(Rc<Function>),
     Closure(Closure),
     Native(NativeFunction),
-    Upvalue(Rc<Value>),
+    Class(Class),
     Nil,
 }
 
@@ -109,7 +110,7 @@ impl Display for Value {
             Value::Func(func) => write!(f, "<fn {}>", func.name()),
             Value::Closure(closure) => write!(f, "<fn {}>", closure.function.name()),
             Value::Native(_) => write!(f, "<native fb>"),
-            Value::Upvalue(addr) => write!(f, "<upvalue {}>", addr),
+            Value::Class(class) => write!(f, "<class {}>", class.name),
         }
     }
 }

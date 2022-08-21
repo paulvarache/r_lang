@@ -4,6 +4,7 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeErrorCode;
 
 use super::closure::Closure;
+use super::value::Value;
 
 pub struct CallFrame {
     pub closure: Closure,
@@ -37,6 +38,24 @@ impl CallFrame {
         let n2 = self.read_byte()?;
 
         Ok(u16::from(n1) << 8 | u16::from(n2))
+    }
+    pub fn read_constant(&mut self) -> LoxResult<Value> {
+        let constant_addr = self.read_byte()?;
+        self.closure
+            .function
+            .chunk
+            .get_constant(constant_addr as usize)
+            .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
+    }
+    pub fn read_constant_long(&mut self) -> LoxResult<Value> {
+        let addr = self.advance();
+        let constant_addr = self.closure.function.chunk.get_constant_long_addr(addr)?;
+        self.ip += 2;
+        self.closure
+            .function
+            .chunk
+            .get_constant(constant_addr as usize)
+            .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
     }
     pub fn get_byte(&self, addr: usize) -> Option<u8> {
         self.closure.function.chunk.get_at(addr)

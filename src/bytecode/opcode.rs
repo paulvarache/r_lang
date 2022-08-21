@@ -33,4 +33,6 @@ pub enum OpCode {
     Closure,
     UpvalueGet,
     UpvalueSet,
+    CloseUpvalue,
+    Class,
 }

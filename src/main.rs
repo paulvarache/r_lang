@@ -95,15 +95,11 @@ impl Lox {
 
             match result {
                 Ok(function) => {
-                    let res = self.vm.call(Closure::new(&Rc::new(function)), 0);
+                    self.vm.call_script(Closure::new(&Rc::new(function)));
 
-                    if let Err(err) = res {
-                        error = Some(err);
-                    } else {
-                        match self.vm.run() {
-                            Ok(_) => {}
-                            Err(e) => error = Some(e),
-                        }
+                    match self.vm.run() {
+                        Ok(_) => {}
+                        Err(e) => error = Some(e),
                     }
                 }
                 Err(e) => error = Some(e),
@@ -130,10 +126,7 @@ impl Lox {
                         for i in (0..self.vm.frames.len() - 1).rev() {
                             let frame = &self.vm.frames[i];
                             let span = compiler
-                                .locate_byte(
-                                    frame.borrow().closure.function.id(),
-                                    frame.borrow().ip - 1,
-                                )
+                                .locate_byte(frame.closure.function.id(), frame.ip - 1)
                                 .unwrap_or_else(|| Span::default());
 
                             println!("{}", compiler.scanner.format_backtrace_line(span));
