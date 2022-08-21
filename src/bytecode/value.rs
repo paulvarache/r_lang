@@ -17,7 +17,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Func(Rc<Function>),
-    Closure(Rc<Closure>),
+    Closure(Closure),
     Native(NativeFunction),
     Upvalue(Rc<Value>),
     Nil,

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::error::LoxError;
 use crate::error::LoxResult;
 use crate::error::RuntimeError;
@@ -8,15 +6,15 @@ use crate::error::RuntimeErrorCode;
 use super::closure::Closure;
 
 pub struct CallFrame {
-    pub closure: Rc<Closure>,
+    pub closure: Closure,
     pub ip: usize,
     pub slots_offset: usize,
 }
 
 impl CallFrame {
-    pub fn new(closure: &Rc<Closure>, slots_offset: usize) -> Self {
+    pub fn new(closure: Closure, slots_offset: usize) -> Self {
         Self {
-            closure: Rc::clone(closure),
+            closure,
             ip: 0,
             slots_offset,
         }

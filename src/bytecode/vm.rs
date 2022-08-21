@@ -266,7 +266,7 @@ impl VM {
                         }
                         self.closure_upvalues
                             .insert(closure.id, vec![Value::Nil; function.upvalue_count.into()]);
-                        self.push(Value::Closure(Rc::new(closure)));
+                        self.push(Value::Closure(closure));
                     }
                 }
                 OpCode::UpvalueGet => {
@@ -303,7 +303,7 @@ impl VM {
     }
     fn call_value(&mut self, value: &Value, arg_count: u8) -> LoxResult<()> {
         match value {
-            Value::Closure(closure) => self.call(closure, arg_count),
+            Value::Closure(closure) => self.call(closure.clone(), arg_count),
             Value::Native(native) => {
                 let end = self.stack.len();
                 let start = end - arg_count as usize;
@@ -315,12 +315,12 @@ impl VM {
             _ => Err(self.error(RuntimeErrorCode::CallNonFunctionValue)),
         }
     }
-    pub fn call(&mut self, closure: &Rc<Closure>, arg_count: u8) -> LoxResult<()> {
+    pub fn call(&mut self, closure: Closure, arg_count: u8) -> LoxResult<()> {
         if arg_count != closure.function.arity() {
             return Err(self.error(RuntimeErrorCode::FunctionCallArityMismatch));
         }
         self.frames.push(RefCell::new(CallFrame::new(
-            &Rc::clone(closure),
+            closure,
             self.stack.len() - arg_count as usize,
         )));
         Ok(())

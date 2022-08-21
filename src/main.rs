@@ -95,7 +95,7 @@ impl Lox {
 
             match result {
                 Ok(function) => {
-                    let res = self.vm.call(&Rc::new(Closure::new(&Rc::new(function))), 0);
+                    let res = self.vm.call(Closure::new(&Rc::new(function)), 0);
 
                     if let Err(err) = res {
                         error = Some(err);
