@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem;
 use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -17,14 +16,13 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeErrorCode;
 
 use super::call_frame::CallFrame;
-use super::function::Function;
-use super::upvalue::Upvalue;
 use super::value::NativeFunction;
 
 pub struct VM {
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
     pub frames: Vec<RefCell<CallFrame>>,
+    closure_upvalues: HashMap<usize, Vec<Value>>,
 }
 
 macro_rules! expr {
@@ -48,6 +46,7 @@ impl VM {
             stack: Vec::new(),
             globals: HashMap::new(),
             frames: Vec::new(),
+            closure_upvalues: HashMap::new(),
         };
 
         s.define_native("clock", native_clock);
@@ -82,25 +81,12 @@ impl VM {
         }
 
         while self.current_frame().borrow().ip
-            < self
-                .current_frame()
-                .borrow()
-                .closure
-                .borrow()
-                .function
-                .chunk
-                .len()
+            < self.current_frame().borrow().closure.function.chunk.len()
         {
             #[cfg(feature = "debug_trace_execution")]
             {
                 let _ = disassemble_chunk_instruction(
-                    &self
-                        .current_frame()
-                        .borrow()
-                        .closure
-                        .borrow()
-                        .function
-                        .chunk,
+                    &self.current_frame().borrow().closure.function.chunk,
                     self.current_frame().borrow().ip,
                 );
             }
@@ -251,7 +237,7 @@ impl VM {
                 OpCode::Closure => {
                     let value = self.read_constant()?;
                     if let Value::Func(function) = value {
-                        let mut closure = Closure::new(&function);
+                        let closure = Closure::new(&function);
 
                         for i in 0..closure.function.upvalue_count {
                             let is_local = self.current_frame().borrow_mut().read_byte()?;
@@ -261,27 +247,45 @@ impl VM {
                                     &self.stack[self.current_frame().borrow().slots_offset
                                         + addr as usize],
                                 );
-                                self.current_frame()
-                                    .borrow_mut()
-                                    .set_upvalue(i as usize, &value);
+                                let current_closure_id = self.current_frame().borrow().closure.id;
+                                let upvalues = self
+                                    .closure_upvalues
+                                    .get_mut(&current_closure_id)
+                                    .expect("");
+                                upvalues[i as usize] = value;
                             } else {
-                                closure.upvalues[i as usize] =
-                                    self.current_frame().borrow().get_upvalue(addr as usize);
+                                let current_value = self
+                                    .closure_upvalues
+                                    .get(&self.current_frame().borrow().closure.id)
+                                    .expect("")[i as usize]
+                                    .clone();
+                                let upvalues =
+                                    self.closure_upvalues.get_mut(&closure.id).expect("");
+                                upvalues[i as usize] = current_value;
                             }
                         }
-                        self.push(Value::Closure(Rc::new(RefCell::new(closure))));
+                        self.closure_upvalues
+                            .insert(closure.id, vec![Value::Nil; function.upvalue_count.into()]);
+                        self.push(Value::Closure(Rc::new(closure)));
                     }
                 }
                 OpCode::UpvalueGet => {
                     let slot = self.current_frame().borrow_mut().read_byte()?;
-                    let value = self.current_frame().borrow().get_upvalue(slot as usize);
-                    self.push(value);
+                    let upvalues = self
+                        .closure_upvalues
+                        .get(&self.current_frame().borrow().closure.id)
+                        .expect("");
+                    self.push(upvalues[slot as usize].clone());
                 }
                 OpCode::UpvalueSet => {
                     let slot = self.current_frame().borrow_mut().read_byte()?;
-                    self.current_frame()
-                        .borrow_mut()
-                        .set_upvalue(slot as usize, &self.peek(0));
+                    let value = self.peek(0).clone();
+                    let current_closure_id = self.current_frame().borrow().closure.id;
+                    let upvalues = self
+                        .closure_upvalues
+                        .get_mut(&current_closure_id)
+                        .expect("");
+                    upvalues[slot as usize] = value;
                 }
             }
             #[cfg(feature = "debug_trace_execution")]
@@ -311,8 +315,8 @@ impl VM {
             _ => Err(self.error(RuntimeErrorCode::CallNonFunctionValue)),
         }
     }
-    pub fn call(&mut self, closure: &Rc<RefCell<Closure>>, arg_count: u8) -> LoxResult<()> {
-        if arg_count != closure.borrow().function.arity() {
+    pub fn call(&mut self, closure: &Rc<Closure>, arg_count: u8) -> LoxResult<()> {
+        if arg_count != closure.function.arity() {
             return Err(self.error(RuntimeErrorCode::FunctionCallArityMismatch));
         }
         self.frames.push(RefCell::new(CallFrame::new(
@@ -339,7 +343,6 @@ impl VM {
         self.current_frame()
             .borrow_mut()
             .closure
-            .borrow()
             .function
             .chunk
             .get_constant(constant_addr as usize)
@@ -350,7 +353,6 @@ impl VM {
             .current_frame()
             .borrow_mut()
             .closure
-            .borrow()
             .function
             .chunk
             .get_constant_long_addr(self.current_frame().borrow_mut().advance())?;
@@ -358,7 +360,6 @@ impl VM {
         self.current_frame()
             .borrow_mut()
             .closure
-            .borrow()
             .function
             .chunk
             .get_constant(constant_addr as usize)
@@ -366,7 +367,7 @@ impl VM {
     }
     fn error(&self, code: RuntimeErrorCode) -> LoxError {
         LoxError::Runtime(RuntimeError {
-            func_id: self.current_frame().borrow().closure.borrow().function.id(),
+            func_id: self.current_frame().borrow().closure.function.id(),
             code,
             addr: self.current_frame().borrow().ip - 1,
         })

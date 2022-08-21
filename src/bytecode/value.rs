@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::fmt::Display;
 use std::ops::Add;
 use std::ops::Div;
@@ -18,7 +17,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Func(Rc<Function>),
-    Closure(Rc<RefCell<Closure>>),
+    Closure(Rc<Closure>),
     Native(NativeFunction),
     Upvalue(Rc<Value>),
     Nil,
@@ -108,7 +107,7 @@ impl Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
             Value::Func(func) => write!(f, "<fn {}>", func.name()),
-            Value::Closure(closure) => write!(f, "<fn {}>", closure.borrow().function.name()),
+            Value::Closure(closure) => write!(f, "<fn {}>", closure.function.name()),
             Value::Native(_) => write!(f, "<native fb>"),
             Value::Upvalue(addr) => write!(f, "<upvalue {}>", addr),
         }

@@ -80,7 +80,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 let value = get_constant(chunk, i)?;
                 print!("{const_addr} ");
                 if let Value::Closure(closure) = value {
-                    for _ in &closure.borrow().upvalues {
+                    for _ in 0..closure.function.upvalue_count {
                         let is_local = get_byte(chunk, offset + 1)?;
                         let addr = get_byte(chunk, offset + 2)?;
                         print!(

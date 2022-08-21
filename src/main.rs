@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io;
@@ -94,9 +95,7 @@ impl Lox {
 
             match result {
                 Ok(function) => {
-                    let res = self
-                        .vm
-                        .call(&Rc::new(RefCell::new(Closure::new(&Rc::new(function)))), 0);
+                    let res = self.vm.call(&Rc::new(Closure::new(&Rc::new(function))), 0);
 
                     if let Err(err) = res {
                         error = Some(err);
@@ -132,7 +131,7 @@ impl Lox {
                             let frame = &self.vm.frames[i];
                             let span = compiler
                                 .locate_byte(
-                                    frame.borrow().closure.borrow().function.id(),
+                                    frame.borrow().closure.function.id(),
                                     frame.borrow().ip - 1,
                                 )
                                 .unwrap_or_else(|| Span::default());
