@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem;
 use std::rc::Rc;
 
 use crate::error::LoxError;
@@ -231,6 +232,11 @@ impl<'a> Compiler<'a> {
             .function_compiler
             .replace(FunctionCompiler::new(&name.lexeme, function_type));
 
+        mem::replace(
+            &mut self.function_compiler.borrow_mut().enclosing,
+            Some(Box::new(previous)),
+        );
+
         self.begin_scope();
 
         self.consume(
@@ -268,7 +274,14 @@ impl<'a> Compiler<'a> {
 
         self.block()?;
 
-        let function_compiler = self.function_compiler.replace(previous);
+        let previous = self
+            .function_compiler
+            .borrow_mut()
+            .enclosing
+            .take()
+            .unwrap();
+
+        let function_compiler = self.function_compiler.replace(*previous);
         let arity = function_compiler.arity();
 
         let function = Function::new(name.lexeme.clone(), function_compiler.chunk, arity);
@@ -281,11 +294,12 @@ impl<'a> Compiler<'a> {
             .borrow_mut()
             .make_constant(Value::Func(Rc::new(function)));
         let end = self.last.clone();
-        self.emit_bytes(
-            OpCode::Constant.into(),
-            const_addr,
-            Span::new_from_range(start.span, end.span),
-        );
+        let span = Span::new_from_range(start.span, end.span);
+        self.emit_bytes(OpCode::Closure, const_addr, span);
+
+        for upvalue in &function_compiler.upvalues {
+            self.emit_bytes(if upvalue.is_local { 1 } else { 0 }, upvalue.addr, span);
+        }
 
         Ok(())
     }
@@ -300,7 +314,7 @@ impl<'a> Compiler<'a> {
             self.skip()?;
             self.expression()?;
         } else {
-            self.emit(OpCode::Nil.into(), token.span);
+            self.emit(OpCode::Nil, token.span);
         }
         self.consume(
             TokenType::Semicolon,
@@ -348,21 +362,31 @@ impl<'a> Compiler<'a> {
             get_op = OpCode::LocalGet;
             set_op = OpCode::LocalSet;
         } else {
-            addr = self
-                .function_compiler
-                .borrow_mut()
-                .identifer_constant(&name);
-            get_op = OpCode::GlobalGet;
-            set_op = OpCode::GlobalSet;
+            let res = self.function_compiler.borrow_mut().resolve_upvalue(&name);
+            if let Err(code) = res {
+                return Err(self.error(code));
+            }
+            if let Ok(Some(upvalue_addr)) = res {
+                addr = upvalue_addr;
+                get_op = OpCode::UpvalueGet;
+                set_op = OpCode::UpvalueSet;
+            } else {
+                addr = self
+                    .function_compiler
+                    .borrow_mut()
+                    .identifer_constant(&name);
+                get_op = OpCode::GlobalGet;
+                set_op = OpCode::GlobalSet;
+            }
         }
         let token = self.peek()?;
         if can_assign && token.ttype == TokenType::Equal {
             self.skip()?;
             self.expression()?;
-            self.emit(set_op.into(), token.span);
+            self.emit(set_op, token.span);
             self.emit(addr, name.span);
         } else {
-            self.emit_bytes(get_op.into(), addr, name.span);
+            self.emit_bytes(get_op, addr, name.span);
         }
         Ok(())
     }
@@ -406,7 +430,7 @@ impl<'a> Compiler<'a> {
             TokenType::Semicolon,
             ParserErrorCode::MissingSemicolonAfterPrintStatement,
         )?;
-        self.emit(OpCode::Print.into(), print_token.span);
+        self.emit(OpCode::Print, print_token.span);
         Ok(())
     }
     fn if_statement(&mut self) -> LoxResult<()> {
@@ -422,11 +446,11 @@ impl<'a> Compiler<'a> {
         )?;
 
         let then_jump = self.emit_jump(OpCode::JumpIfFalse, if_token.span);
-        self.emit(OpCode::Pop.into(), if_token.span);
+        self.emit(OpCode::Pop, if_token.span);
         self.statement()?;
         let else_jump = self.emit_jump(OpCode::Jump, if_token.span);
         self.patch_jump(then_jump)?;
-        self.emit(OpCode::Pop.into(), if_token.span);
+        self.emit(OpCode::Pop, if_token.span);
         if self.peek()?.ttype == TokenType::Else {
             self.skip()?;
             self.statement()?;
@@ -437,7 +461,10 @@ impl<'a> Compiler<'a> {
     }
     fn return_statement(&mut self) -> LoxResult<()> {
         let return_token = self.advance()?;
-        if matches!(self.function_compiler.borrow().function_type, FunctionType::Script) {
+        if matches!(
+            self.function_compiler.borrow().function_type,
+            FunctionType::Script
+        ) {
             return Err(self.error(ParserErrorCode::TopLevelReturn));
         }
         let next = self.peek()?;
@@ -450,7 +477,7 @@ impl<'a> Compiler<'a> {
                 ParserErrorCode::MissingSemicolonAfterReturnStatement,
             )?;
             self.emit(
-                OpCode::Return.into(),
+                OpCode::Return,
                 Span::new_from_range(return_token.span, semicolon_token.span),
             );
         }
@@ -470,12 +497,12 @@ impl<'a> Compiler<'a> {
         )?;
 
         let exit_jump = self.emit_jump(OpCode::JumpIfFalse, while_token.span);
-        self.emit(OpCode::Pop.into(), while_token.span);
+        self.emit(OpCode::Pop, while_token.span);
         self.statement()?;
         self.emit_loop(loop_start, while_token.span)?;
 
         self.patch_jump(exit_jump)?;
-        self.emit(OpCode::Pop.into(), while_token.span);
+        self.emit(OpCode::Pop, while_token.span);
 
         Ok(())
     }
@@ -504,14 +531,14 @@ impl<'a> Compiler<'a> {
             )?;
 
             exit_jump = Some(self.emit_jump(OpCode::JumpIfFalse, for_token.span));
-            self.emit(OpCode::Pop.into(), for_token.span);
+            self.emit(OpCode::Pop, for_token.span);
         }
 
         if self.peek()?.ttype != TokenType::CloseParen {
             let body_jump = self.emit_jump(OpCode::Jump, for_token.span);
             let increment_start = self.function_compiler.borrow().current_addr();
             self.expression()?;
-            self.emit(OpCode::Pop.into(), for_token.span);
+            self.emit(OpCode::Pop, for_token.span);
             self.consume(
                 TokenType::CloseParen,
                 ParserErrorCode::MissingClosingParenAfterFor,
@@ -527,7 +554,7 @@ impl<'a> Compiler<'a> {
 
         if let Some(exit_jump) = exit_jump {
             self.patch_jump(exit_jump)?;
-            self.emit(OpCode::Pop.into(), for_token.span);
+            self.emit(OpCode::Pop, for_token.span);
         }
 
         self.end_scope();
@@ -539,17 +566,17 @@ impl<'a> Compiler<'a> {
             TokenType::Semicolon,
             ParserErrorCode::MissingSemicolonAfterExpressionStatement,
         )?;
-        self.emit(OpCode::Pop.into(), token.span);
+        self.emit(OpCode::Pop, token.span);
         Ok(())
     }
     fn expression(&mut self) -> LoxResult<()> {
         self.parse_precedence(Precedence::Assignment, ParserErrorCode::UnterminatedBlock)?;
         Ok(())
     }
-    fn emit(&mut self, byte: u8, span: Span) {
+    fn emit<T: Into<u8>>(&mut self, byte: T, span: Span) {
         self.function_compiler.borrow_mut().emit(byte, span);
     }
-    fn emit_bytes(&mut self, a: u8, b: u8, span: Span) {
+    fn emit_bytes<T: Into<u8>, U: Into<u8>>(&mut self, a: T, b: U, span: Span) {
         self.function_compiler.borrow_mut().emit_bytes(a, b, span);
     }
     fn emit_constant(&mut self, value: Value, span: Span) {
@@ -605,7 +632,7 @@ impl<'a> Compiler<'a> {
         let arg_count = self.argument_list()?;
         let end = self.last.clone();
         self.emit_bytes(
-            OpCode::Call.into(),
+            OpCode::Call,
             arg_count,
             Span::new_from_range(start, end.span),
         );
@@ -641,8 +668,8 @@ impl<'a> Compiler<'a> {
             ParserErrorCode::MissingUnaryRightHandSide,
         )?;
         match token.ttype {
-            TokenType::Minus => self.emit(OpCode::Negate.into(), token.span),
-            TokenType::Bang => self.emit(OpCode::Not.into(), token.span),
+            TokenType::Minus => self.emit(OpCode::Negate, token.span),
+            TokenType::Bang => self.emit(OpCode::Not, token.span),
             _ => unreachable!(),
         }
 
@@ -654,22 +681,16 @@ impl<'a> Compiler<'a> {
         if let Some(p) = Precedence::from_index(rule.precedence.get_enum_index() + 1) {
             self.parse_precedence(p, ParserErrorCode::MissingTermRightHandSide)?;
             match token.ttype.clone() {
-                TokenType::Plus => self.emit(OpCode::Add.into(), token.span),
-                TokenType::Minus => self.emit(OpCode::Subtract.into(), token.span),
-                TokenType::Star => self.emit(OpCode::Multiply.into(), token.span),
-                TokenType::Slash => self.emit(OpCode::Divide.into(), token.span),
-                TokenType::EqualEqual => self.emit(OpCode::Equal.into(), token.span),
-                TokenType::BangEqual => {
-                    self.emit_bytes(OpCode::Equal.into(), OpCode::Not.into(), token.span)
-                }
-                TokenType::Greater => self.emit(OpCode::Greater.into(), token.span),
-                TokenType::GreaterEqual => {
-                    self.emit_bytes(OpCode::Less.into(), OpCode::Not.into(), token.span)
-                }
-                TokenType::Less => self.emit(OpCode::Less.into(), token.span),
-                TokenType::LessEqual => {
-                    self.emit_bytes(OpCode::Greater.into(), OpCode::Not.into(), token.span)
-                }
+                TokenType::Plus => self.emit(OpCode::Add, token.span),
+                TokenType::Minus => self.emit(OpCode::Subtract, token.span),
+                TokenType::Star => self.emit(OpCode::Multiply, token.span),
+                TokenType::Slash => self.emit(OpCode::Divide, token.span),
+                TokenType::EqualEqual => self.emit(OpCode::Equal, token.span),
+                TokenType::BangEqual => self.emit_bytes(OpCode::Equal, OpCode::Not, token.span),
+                TokenType::Greater => self.emit(OpCode::Greater, token.span),
+                TokenType::GreaterEqual => self.emit_bytes(OpCode::Less, OpCode::Not, token.span),
+                TokenType::Less => self.emit(OpCode::Less, token.span),
+                TokenType::LessEqual => self.emit_bytes(OpCode::Greater, OpCode::Not, token.span),
                 _ => panic!("invalid binary operator {:?}", token.ttype),
             }
         }
@@ -682,7 +703,7 @@ impl<'a> Compiler<'a> {
         let end_jump = self.emit_jump(OpCode::Jump, token.span);
 
         self.patch_jump(else_jump)?;
-        self.emit(OpCode::Pop.into(), token.span);
+        self.emit(OpCode::Pop, token.span);
         self.parse_precedence(Precedence::Or, ParserErrorCode::MissingTermRightHandSide)?;
 
         self.patch_jump(end_jump)?;
@@ -703,9 +724,9 @@ impl<'a> Compiler<'a> {
     fn literal(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = &self.last;
         match token.ttype {
-            TokenType::Nil => self.emit(OpCode::Nil.into(), token.span),
-            TokenType::True => self.emit(OpCode::True.into(), token.span),
-            TokenType::False => self.emit(OpCode::False.into(), token.span),
+            TokenType::Nil => self.emit(OpCode::Nil, token.span),
+            TokenType::True => self.emit(OpCode::True, token.span),
+            TokenType::False => self.emit(OpCode::False, token.span),
             _ => {}
         }
         Ok(())
@@ -788,6 +809,6 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit_return(&mut self, span: Span) {
-        self.emit_bytes(OpCode::Nil.into(), OpCode::Return.into(), span);
+        self.emit_bytes(OpCode::Nil, OpCode::Return, span);
     }
 }

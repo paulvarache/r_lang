@@ -22,15 +22,13 @@ mod parser;
 mod resolver;
 mod scanner;
 
-use bytecode::call_frame::CallFrame;
+use bytecode::closure::Closure;
 use bytecode::compiler::Compiler;
 use bytecode::vm::VM;
 use colored::Colorize;
 use error::LoxError;
 use stringreader::StringReader;
 
-use crate::bytecode::debug::disassemble_chunk;
-use crate::bytecode::debug::disassemble_chunk_instruction;
 use crate::interpreter::Interpreter;
 use crate::scanner::span::Span;
 use crate::scanner::Scanner;
@@ -96,7 +94,9 @@ impl Lox {
 
             match result {
                 Ok(function) => {
-                    let res = self.vm.call(&Rc::new(function), 0);
+                    let res = self
+                        .vm
+                        .call(&Rc::new(RefCell::new(Closure::new(&Rc::new(function)))), 0);
 
                     if let Err(err) = res {
                         error = Some(err);
@@ -131,7 +131,10 @@ impl Lox {
                         for i in (0..self.vm.frames.len() - 1).rev() {
                             let frame = &self.vm.frames[i];
                             let span = compiler
-                                .locate_byte(frame.borrow().function.id(), frame.borrow().ip - 1)
+                                .locate_byte(
+                                    frame.borrow().closure.borrow().function.id(),
+                                    frame.borrow().ip - 1,
+                                )
                                 .unwrap_or_else(|| Span::default());
 
                             println!("{}", compiler.scanner.format_backtrace_line(span));

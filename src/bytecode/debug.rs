@@ -29,7 +29,11 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant(chunk, offset + 1)?;
                 offset + 2
             }
-            OpCode::DefineGlobal | OpCode::GlobalGet | OpCode::GlobalSet => {
+            OpCode::DefineGlobal
+            | OpCode::GlobalGet
+            | OpCode::GlobalSet
+            | OpCode::UpvalueGet
+            | OpCode::UpvalueSet => {
                 print_variable(chunk, offset + 1)?;
                 offset + 2
             }
@@ -69,6 +73,26 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 let arg_count = get_byte(chunk, offset + 1)?;
                 print!("{} args", arg_count.to_string().bright_green());
                 offset + 2
+            }
+            OpCode::Closure => {
+                let mut i = offset + 1;
+                let const_addr = get_byte(chunk, i)?;
+                let value = get_constant(chunk, i)?;
+                print!("{const_addr} ");
+                if let Value::Closure(closure) = value {
+                    for _ in &closure.borrow().upvalues {
+                        let is_local = get_byte(chunk, offset + 1)?;
+                        let addr = get_byte(chunk, offset + 2)?;
+                        print!(
+                            "{:04} | {}: {:04}",
+                            i,
+                            if is_local == 0 { "upvalue" } else { "local" },
+                            addr
+                        );
+                        i += 2;
+                    }
+                }
+                i
             }
         };
         println!("");

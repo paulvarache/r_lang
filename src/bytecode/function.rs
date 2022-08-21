@@ -16,6 +16,7 @@ pub struct Function {
     arity: u8,
     pub chunk: Chunk,
     name: String,
+    pub upvalue_count: u8,
 }
 
 impl Function {
@@ -25,6 +26,7 @@ impl Function {
             arity,
             chunk,
             name,
+            upvalue_count: 0,
         }
     }
     pub fn id(&self) -> usize {

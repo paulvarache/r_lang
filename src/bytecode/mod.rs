@@ -10,3 +10,5 @@ mod local;
 pub mod call_frame;
 mod function;
 mod function_compiler;
+pub mod closure;
+mod upvalue;

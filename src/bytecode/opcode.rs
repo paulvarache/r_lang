@@ -30,4 +30,7 @@ pub enum OpCode {
     Jump,
     Loop,
     Call,
+    Closure,
+    UpvalueGet,
+    UpvalueSet,
 }

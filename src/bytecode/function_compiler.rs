@@ -3,6 +3,7 @@ use super::function::FunctionType;
 use super::local::Local;
 use super::opcode::OpCode;
 use super::sourcemap::Sourcemap;
+use super::upvalue::Upvalue;
 use crate::error::ParserErrorCode;
 use crate::scanner::span::Span;
 use crate::scanner::token::Token;
@@ -19,6 +20,8 @@ pub struct FunctionCompiler {
     pub chunk: Chunk,
     pub sourcemap: Sourcemap,
     pub function_type: FunctionType,
+    pub enclosing: Option<Box<FunctionCompiler>>,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl FunctionCompiler {
@@ -31,6 +34,8 @@ impl FunctionCompiler {
             sourcemap: Sourcemap::new(),
             function_type,
             name: name.to_string(),
+            enclosing: None,
+            upvalues: Vec::new(),
         }
     }
     pub fn identifer_constant(&mut self, name: &Token) -> u8 {
@@ -45,10 +50,10 @@ impl FunctionCompiler {
         self.chunk.write(byte);
         self.sourcemap.describe_byte(index, span);
     }
-    pub fn emit(&mut self, byte: u8, span: Span) {
-        self.write(byte, span);
+    pub fn emit<T: Into<u8>>(&mut self, byte: T, span: Span) {
+        self.write(byte.into(), span);
     }
-    pub fn emit_bytes(&mut self, a: u8, b: u8, span: Span) {
+    pub fn emit_bytes<T: Into<u8>, U: Into<u8>>(&mut self, a: T, b: U, span: Span) {
         self.emit(a, span);
         self.emit(b, span);
     }
@@ -79,7 +84,7 @@ impl FunctionCompiler {
         // Don't emit the extra POPN if there is nothing to pop
         if n != 0 {
             // Pop that many
-            self.emit(OpCode::Popn.into(), span);
+            self.emit(OpCode::Popn, span);
             self.emit(n, span);
         }
 
@@ -111,7 +116,7 @@ impl FunctionCompiler {
             self.mark_initialized();
             return;
         }
-        self.emit_bytes(OpCode::DefineGlobal.into(), const_addr, span);
+        self.emit_bytes(OpCode::DefineGlobal, const_addr, span);
     }
     pub fn add_local(&mut self, name: &Token) -> ParseResult<()> {
         if self.locals.len() == u8::MAX.into() {
@@ -134,6 +139,35 @@ impl FunctionCompiler {
         Ok(None)
     }
 
+    pub fn resolve_upvalue(&mut self, name: &Token) -> ParseResult<Option<u8>> {
+        if let Some(enclosing) = &mut self.enclosing {
+            if let Some(local) = enclosing.resolve_local(name)? {
+                return self.add_upvalue(local, true);
+            }
+            if let Some(addr) = enclosing.resolve_upvalue(name)? {
+                return self.add_upvalue(addr, false);
+            }
+        } else {
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    fn add_upvalue(&mut self, addr: u8, is_local: bool) -> ParseResult<Option<u8>> {
+        for (i, upvalue) in self.upvalues.iter().enumerate() {
+            if upvalue.addr == addr && upvalue.is_local == is_local {
+                return Ok(Some(i as u8));
+            }
+        }
+        if self.upvalues.len() == 255 {
+            return Err(ParserErrorCode::TooManyLocals);
+        }
+        let upvalue = Upvalue::new(is_local, addr);
+        let upvalue_addr = self.upvalues.len();
+        self.upvalues.push(upvalue);
+        Ok(Some(upvalue_addr as u8))
+    }
+
     pub fn mark_initialized(&mut self) {
         if self.scope_depth == 0 {
             return;
@@ -144,7 +178,7 @@ impl FunctionCompiler {
     }
 
     pub fn emit_jump(&mut self, opcode: OpCode, span: Span) -> usize {
-        self.emit(opcode.into(), span);
+        self.emit(opcode, span);
         self.emit(0xFF, span);
         self.emit(0xFF, span);
 
@@ -164,7 +198,7 @@ impl FunctionCompiler {
     }
 
     pub fn emit_loop(&mut self, addr: usize, span: Span) -> ParseResult<()> {
-        self.emit(OpCode::Loop.into(), span);
+        self.emit(OpCode::Loop, span);
 
         let offset = (self.current_addr() - addr + 2) as u16;
         if offset > u16::MAX {

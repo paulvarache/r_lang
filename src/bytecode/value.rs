@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::ops::Add;
 use std::ops::Div;
@@ -6,6 +7,7 @@ use std::ops::Neg;
 use std::ops::Sub;
 use std::rc::Rc;
 
+use super::closure::Closure;
 use super::function::Function;
 
 pub type NativeFunction = fn(args: Vec<Value>) -> Value;
@@ -16,7 +18,9 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Func(Rc<Function>),
+    Closure(Rc<RefCell<Closure>>),
     Native(NativeFunction),
+    Upvalue(Rc<Value>),
     Nil,
 }
 
@@ -104,7 +108,9 @@ impl Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
             Value::Func(func) => write!(f, "<fn {}>", func.name()),
+            Value::Closure(closure) => write!(f, "<fn {}>", closure.borrow().function.name()),
             Value::Native(_) => write!(f, "<native fb>"),
+            Value::Upvalue(addr) => write!(f, "<upvalue {}>", addr),
         }
     }
 }
