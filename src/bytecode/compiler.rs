@@ -12,6 +12,8 @@ use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::Scan;
 
+use super::class_compiler::ClassCompiler;
+use super::class_compiler::ClassCompilerLink;
 use super::debug::disassemble_chunk;
 use super::function::Function;
 use super::function::FunctionType;
@@ -35,7 +37,7 @@ pub struct Compiler<'a> {
     next: Option<Token>,
     pub scanner: Box<dyn Scan + 'a>,
     function_compiler: RefCell<FunctionCompiler>,
-    function_type: FunctionType,
+    class_compiler: ClassCompilerLink,
     sourcemaps: HashMap<usize, Sourcemap>,
 }
 
@@ -76,8 +78,8 @@ impl<'a> Compiler<'a> {
             last: Token::default(),
             scanner,
             function_compiler: RefCell::new(FunctionCompiler::new("__", FunctionType::Script)),
-            function_type: FunctionType::Script,
             sourcemaps: HashMap::new(),
+            class_compiler: None,
         }
     }
     pub fn compile(&mut self) -> LoxResult<Function> {
@@ -202,7 +204,11 @@ impl<'a> Compiler<'a> {
             TokenType::Print => ParseRule::default(),
             TokenType::Return => ParseRule::default(),
             TokenType::Super => todo!(),
-            TokenType::This => todo!(),
+            TokenType::This => ParseRule {
+                prefix: Some(Compiler::this),
+                infix: None,
+                precedence: Precedence::None,
+            },
             TokenType::True => literal_rule!(),
             TokenType::Var => todo!(),
             TokenType::While => todo!(),
@@ -249,15 +255,62 @@ impl<'a> Compiler<'a> {
             .borrow_mut()
             .define_variable(class_name_addr, span);
 
+        let current = self.class_compiler.take();
+
+        self.class_compiler
+            .replace(Box::new(ClassCompiler::new(current)));
+
+        self.named_variable(&name, false)?;
+
         self.consume(
             TokenType::OpenBrace,
             ParserErrorCode::MissingOpenBraceAfterClassName,
         )?;
+
+        loop {
+            let next = self.peek()?;
+            if next.ttype == TokenType::CloseBrace {
+                break;
+            }
+            self.method()?;
+        }
+
         self.consume(
             TokenType::CloseBrace,
             ParserErrorCode::MissingOpenBraceAfterClassDeclaration,
         )?;
 
+        self.emit(
+            OpCode::Pop,
+            Span::new_from_range(class_token.span, self.last.span),
+        );
+
+        let current = self.class_compiler.take();
+
+        if let Some(current) = current {
+            if let Some(enclosing) = current.enclosing {
+                self.class_compiler.replace(enclosing);
+            }
+        }
+
+        Ok(())
+    }
+    fn method(&mut self) -> LoxResult<()> {
+        let name = self.consume(
+            TokenType::Identifier,
+            ParserErrorCode::MissingIdentifierAfterFunKeyword,
+        )?;
+        let const_addr = self
+            .function_compiler
+            .borrow_mut()
+            .identifer_constant(&name);
+        let func_type = if name.lexeme == "init" {
+            FunctionType::Initializer
+        } else {
+            FunctionType::Method
+        };
+        self.function(func_type, &name)?;
+        self.emit_bytes(OpCode::Method, const_addr, name.span);
         Ok(())
     }
     fn fun_declaration(&mut self) -> LoxResult<()> {
@@ -529,6 +582,9 @@ impl<'a> Compiler<'a> {
                 semicolon_token.span,
             ));
         } else {
+            if matches!(self.function_compiler.borrow().function_type, FunctionType::Initializer) {
+                return Err(self.error(ParserErrorCode::InitializerReturnValue));
+            }
             self.expression()?;
             let semicolon_token = self.consume(
                 TokenType::Semicolon,
@@ -720,7 +776,6 @@ impl<'a> Compiler<'a> {
         Ok(arg_count)
     }
     fn dot(&mut self, can_assign: bool) -> LoxResult<()> {
-        let dot_token_span = self.last.span;
         let name = self.consume(
             TokenType::Identifier,
             ParserErrorCode::MissingIdentifierAfterCallDot,
@@ -734,19 +789,17 @@ impl<'a> Compiler<'a> {
         if can_assign && next.ttype == TokenType::Equal {
             self.skip()?;
             self.expression()?;
-            self.emit_bytes(
-                OpCode::PropertySet,
-                const_addr,
-                Span::new_from_range(dot_token_span, self.last.span),
-            );
+            self.emit_bytes(OpCode::PropertySet, const_addr, self.last.span);
         } else {
-            self.emit_bytes(
-                OpCode::PropertyGet,
-                const_addr,
-                Span::new_from_range(dot_token_span, self.last.span),
-            );
+            self.emit_bytes(OpCode::PropertyGet, const_addr, self.last.span);
         }
         Ok(())
+    }
+    fn this(&mut self, _can_assign: bool) -> LoxResult<()> {
+        if self.class_compiler.is_none() {
+            return Err(self.error(ParserErrorCode::ThisOutsideMethod));
+        }
+        self.variable(false)
     }
     fn unary(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = self.last.clone();
@@ -896,7 +949,12 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit_return(&mut self, span: Span) {
-        self.emit_bytes(OpCode::Nil, OpCode::Return, span);
+        if matches!(self.function_compiler.borrow().function_type, FunctionType::Initializer) {
+            self.emit_bytes(OpCode::LocalGet, 0, span);
+        } else {
+            self.emit(OpCode::Nil, span);
+        }
+        self.emit(OpCode::Return, span);
     }
 
     fn end_compiler(&mut self) {

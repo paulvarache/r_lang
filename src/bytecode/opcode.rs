@@ -37,4 +37,5 @@ pub enum OpCode {
     Class,
     PropertySet,
     PropertyGet,
+    Method,
 }

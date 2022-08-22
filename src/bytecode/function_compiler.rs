@@ -25,9 +25,17 @@ pub struct FunctionCompiler {
 
 impl FunctionCompiler {
     pub fn new(name: &str, function_type: FunctionType) -> Self {
+        let init_local_name = match function_type {
+            FunctionType::Function => "",
+            _ => "this",
+        };
         Self {
             arity: 0,
-            locals: Vec::new(),
+            locals: vec![Local {
+                name: init_local_name.to_string(),
+                depth: Some(0),
+                is_captured: false,
+            }],
             scope_depth: 0,
             chunk: Chunk::new(),
             sourcemap: Sourcemap::new(),
@@ -102,7 +110,7 @@ impl FunctionCompiler {
                 }
             }
 
-            if local.name.lexeme == name.lexeme {
+            if local.name == name.lexeme {
                 return Err(ParserErrorCode::LocalAlreadyDefined);
             }
         }
@@ -119,14 +127,14 @@ impl FunctionCompiler {
         if self.locals.len() == u8::MAX.into() {
             return Err(ParserErrorCode::TooManyLocals);
         }
-        self.locals.push(Local::new(name));
+        self.locals.push(Local::new(name.lexeme.clone()));
         Ok(())
     }
 
     pub fn resolve_local(&self, name: &Token) -> ParseResult<Option<u8>> {
         for i in (0..self.locals.len()).rev() {
             let local = &self.locals[i];
-            if local.name.lexeme == name.lexeme {
+            if local.name == name.lexeme {
                 if local.depth.is_none() {
                     return Err(ParserErrorCode::ReadOwnLocalBeforeInitialized);
                 }

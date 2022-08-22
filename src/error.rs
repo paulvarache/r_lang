@@ -69,6 +69,8 @@ pub enum ParserErrorCode {
     JumpTooLong,
     TopLevelReturn,
     MissingOpenBraceAfterClassDeclaration,
+    ThisOutsideMethod,
+    InitializerReturnValue,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -107,6 +109,7 @@ pub enum RuntimeErrorCode {
     FunctionCallArityMismatch,
     UndefinedProperty,
     NonInstancePropertyAccess,
+    ClassInitializerArityMismatch,
 }
 
 #[derive(Debug)]
@@ -193,6 +196,7 @@ impl Demistify for RuntimeError {
             RuntimeErrorCode::FunctionCallArityMismatch => "function call mismatch arity".to_string(),
             RuntimeErrorCode::UndefinedProperty => "undefined property".to_string(),
             RuntimeErrorCode::NonInstancePropertyAccess => "only instances have fields".to_string(),
+            RuntimeErrorCode::ClassInitializerArityMismatch => "class init arity mismatch".to_string(),
         }
     }
 }

@@ -1,16 +1,14 @@
-use crate::scanner::token::Token;
-
 pub struct Local {
     pub depth: Option<usize>,
-    pub name: Token,
+    pub name: String,
     pub is_captured: bool,
 }
 
 impl Local {
-    pub fn new(name: &Token) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             depth: None,
-            name: name.clone(),
+            name: name,
             is_captured: false,
         }
     }

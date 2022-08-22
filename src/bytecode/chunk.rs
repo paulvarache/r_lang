@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::bytecode::opcode::OpCode;
 use crate::bytecode::value::Value;
 use crate::error::LoxError;
@@ -9,7 +7,7 @@ use crate::error::RuntimeError;
 #[derive(Clone, Debug)]
 pub struct Chunk {
     code: Vec<u8>,
-    constants: Vec<Rc<Value>>,
+    constants: Vec<Value>,
 }
 
 impl Chunk {
@@ -39,15 +37,15 @@ impl Chunk {
     }
     pub fn add_constant(&mut self, value: Value) -> u8 {
         let addr = self.constants.len();
-        self.constants.push(Rc::new(value));
+        self.constants.push(value);
         addr as u8
     }
     pub fn add_constant_long(&mut self, value: Value) -> u32 {
         let addr = self.constants.len();
-        self.constants.push(Rc::new(value));
+        self.constants.push(value);
         addr as u32
     }
-    pub fn get_constant(&self, index: usize) -> Option<&Rc<Value>> {
+    pub fn get_constant(&self, index: usize) -> Option<&Value> {
         self.constants.get(index)
     }
     pub fn free(&mut self) {

@@ -11,16 +11,16 @@ use super::upvalue::Upvalue;
 use super::value::Value;
 
 pub struct CallFrame {
-    pub closure: Closure,
+    pub closure: Rc<Closure>,
     pub ip: usize,
     pub slots_offset: usize,
     pub upvalues: HashMap<u8, Upvalue>,
 }
 
 impl CallFrame {
-    pub fn new(closure: Closure, slots_offset: usize) -> Self {
+    pub fn new(closure: &Rc<Closure>, slots_offset: usize) -> Self {
         Self {
-            closure,
+            closure: Rc::clone(closure),
             ip: 0,
             slots_offset,
             upvalues: HashMap::new(),
@@ -45,7 +45,7 @@ impl CallFrame {
 
         Ok(u16::from(n1) << 8 | u16::from(n2))
     }
-    pub fn read_constant(&mut self) -> LoxResult<&Rc<Value>> {
+    pub fn read_constant(&mut self) -> LoxResult<&Value> {
         let constant_addr = self.read_byte()?;
         self.closure
             .function
@@ -53,7 +53,7 @@ impl CallFrame {
             .get_constant(constant_addr as usize)
             .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
     }
-    pub fn read_constant_long(&mut self) -> LoxResult<&Rc<Value>> {
+    pub fn read_constant_long(&mut self) -> LoxResult<&Value> {
         let addr = self.advance();
         let constant_addr = self.closure.function.chunk.get_constant_long_addr(addr)?;
         self.ip += 2;

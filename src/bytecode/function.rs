@@ -5,6 +5,8 @@ use super::chunk::Chunk;
 
 pub enum FunctionType {
     Function,
+    Initializer,
+    Method,
     Script,
 }
 
