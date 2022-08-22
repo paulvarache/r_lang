@@ -35,4 +35,6 @@ pub enum OpCode {
     UpvalueSet,
     CloseUpvalue,
     Class,
+    PropertySet,
+    PropertyGet,
 }

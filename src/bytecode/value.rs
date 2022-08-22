@@ -9,8 +9,9 @@ use std::rc::Rc;
 use super::class::Class;
 use super::closure::Closure;
 use super::function::Function;
+use super::instance::Instance;
 
-pub type NativeFunction = fn(args: Vec<Value>) -> Value;
+pub type NativeFunction = fn(args: Vec<Rc<Value>>) -> Value;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -20,7 +21,8 @@ pub enum Value {
     Func(Rc<Function>),
     Closure(Closure),
     Native(NativeFunction),
-    Class(Class),
+    Class(Rc<Class>),
+    Instance(Rc<Instance>),
     Nil,
 }
 
@@ -111,6 +113,7 @@ impl Display for Value {
             Value::Closure(closure) => write!(f, "<fn {}>", closure.function.name()),
             Value::Native(_) => write!(f, "<native fb>"),
             Value::Class(class) => write!(f, "<class {}>", class.name),
+            Value::Instance(instance) => write!(f, "<{} instance>", instance.class.name),
         }
     }
 }

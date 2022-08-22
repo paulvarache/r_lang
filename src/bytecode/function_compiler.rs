@@ -13,7 +13,7 @@ type ParseResult<T> = Result<T, ParserErrorCode>;
 
 pub struct FunctionCompiler {
     arity: u8,
-    name: String,
+    pub name: String,
     locals: Vec<Local>,
     scope_depth: usize,
     pub chunk: Chunk,

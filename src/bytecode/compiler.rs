@@ -12,6 +12,7 @@ use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
 use crate::scanner::Scan;
 
+use super::debug::disassemble_chunk;
 use super::function::Function;
 use super::function::FunctionType;
 use super::function_compiler::FunctionCompiler;
@@ -87,6 +88,7 @@ impl<'a> Compiler<'a> {
                 return Err(err);
             }
         }
+        self.end_compiler();
         let function_compiler = self
             .function_compiler
             .replace(FunctionCompiler::new("__", FunctionType::Script));
@@ -135,7 +137,11 @@ impl<'a> Compiler<'a> {
             TokenType::OpenBrace => todo!(),
             TokenType::CloseBrace => todo!(),
             TokenType::Comma => ParseRule::default(),
-            TokenType::Dot => todo!(),
+            TokenType::Dot => ParseRule {
+                prefix: None,
+                infix: Some(Compiler::dot),
+                precedence: Precedence::Call,
+            },
             TokenType::Minus => ParseRule {
                 prefix: Some(Compiler::unary),
                 infix: Some(Compiler::binary),
@@ -272,7 +278,7 @@ impl<'a> Compiler<'a> {
             .function_compiler
             .replace(FunctionCompiler::new(&name.lexeme, function_type));
 
-        self.function_compiler.borrow_mut().enclosing = mem::replace(
+        mem::replace(
             &mut self.function_compiler.borrow_mut().enclosing,
             Some(Box::new(previous)),
         );
@@ -313,6 +319,8 @@ impl<'a> Compiler<'a> {
         )?;
 
         self.block()?;
+
+        self.end_compiler();
 
         let previous = self
             .function_compiler
@@ -515,7 +523,11 @@ impl<'a> Compiler<'a> {
         }
         let next = self.peek()?;
         if next.ttype == TokenType::Semicolon {
-            self.emit_return(Span::new_from_range(return_token.span, next.span));
+            let semicolon_token = self.advance()?;
+            self.emit_return(Span::new_from_range(
+                return_token.span,
+                semicolon_token.span,
+            ));
         } else {
             self.expression()?;
             let semicolon_token = self.consume(
@@ -707,6 +719,35 @@ impl<'a> Compiler<'a> {
         )?;
         Ok(arg_count)
     }
+    fn dot(&mut self, can_assign: bool) -> LoxResult<()> {
+        let dot_token_span = self.last.span;
+        let name = self.consume(
+            TokenType::Identifier,
+            ParserErrorCode::MissingIdentifierAfterCallDot,
+        )?;
+        let const_addr = self
+            .function_compiler
+            .borrow_mut()
+            .identifer_constant(&name);
+
+        let next = self.peek()?;
+        if can_assign && next.ttype == TokenType::Equal {
+            self.skip()?;
+            self.expression()?;
+            self.emit_bytes(
+                OpCode::PropertySet,
+                const_addr,
+                Span::new_from_range(dot_token_span, self.last.span),
+            );
+        } else {
+            self.emit_bytes(
+                OpCode::PropertyGet,
+                const_addr,
+                Span::new_from_range(dot_token_span, self.last.span),
+            );
+        }
+        Ok(())
+    }
     fn unary(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = self.last.clone();
         self.parse_precedence(
@@ -856,5 +897,18 @@ impl<'a> Compiler<'a> {
 
     fn emit_return(&mut self, span: Span) {
         self.emit_bytes(OpCode::Nil, OpCode::Return, span);
+    }
+
+    fn end_compiler(&mut self) {
+        self.emit_return(self.last.span);
+        #[cfg(feature = "print_debug_code")]
+        {
+            let name = if self.function_compiler.borrow().name == "__".to_string() {
+                "<script>".to_string()
+            } else {
+                self.function_compiler.borrow().name.clone()
+            };
+            disassemble_chunk(&self.function_compiler.borrow().chunk, name);
+        }
     }
 }

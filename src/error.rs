@@ -105,6 +105,8 @@ pub enum RuntimeErrorCode {
     UndefinedGlobal,
     CallNonFunctionValue,
     FunctionCallArityMismatch,
+    UndefinedProperty,
+    NonInstancePropertyAccess,
 }
 
 #[derive(Debug)]
@@ -189,6 +191,8 @@ impl Demistify for RuntimeError {
             RuntimeErrorCode::UndefinedGlobal => "undefined global variable".to_string(),
             RuntimeErrorCode::CallNonFunctionValue => "can only call functions".to_string(),
             RuntimeErrorCode::FunctionCallArityMismatch => "function call mismatch arity".to_string(),
+            RuntimeErrorCode::UndefinedProperty => "undefined property".to_string(),
+            RuntimeErrorCode::NonInstancePropertyAccess => "only instances have fields".to_string(),
         }
     }
 }

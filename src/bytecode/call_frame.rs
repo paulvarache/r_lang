@@ -1,15 +1,20 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::error::LoxError;
 use crate::error::LoxResult;
 use crate::error::RuntimeError;
 use crate::error::RuntimeErrorCode;
 
 use super::closure::Closure;
+use super::upvalue::Upvalue;
 use super::value::Value;
 
 pub struct CallFrame {
     pub closure: Closure,
     pub ip: usize,
     pub slots_offset: usize,
+    pub upvalues: HashMap<u8, Upvalue>,
 }
 
 impl CallFrame {
@@ -18,6 +23,7 @@ impl CallFrame {
             closure,
             ip: 0,
             slots_offset,
+            upvalues: HashMap::new(),
         }
     }
     pub fn advance(&mut self) -> usize {
@@ -39,7 +45,7 @@ impl CallFrame {
 
         Ok(u16::from(n1) << 8 | u16::from(n2))
     }
-    pub fn read_constant(&mut self) -> LoxResult<Value> {
+    pub fn read_constant(&mut self) -> LoxResult<&Rc<Value>> {
         let constant_addr = self.read_byte()?;
         self.closure
             .function
@@ -47,7 +53,7 @@ impl CallFrame {
             .get_constant(constant_addr as usize)
             .ok_or_else(|| self.error(RuntimeErrorCode::OutOfConstantsBounds))
     }
-    pub fn read_constant_long(&mut self) -> LoxResult<Value> {
+    pub fn read_constant_long(&mut self) -> LoxResult<&Rc<Value>> {
         let addr = self.advance();
         let constant_addr = self.closure.function.chunk.get_constant_long_addr(addr)?;
         self.ip += 2;

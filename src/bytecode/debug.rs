@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::bytecode::chunk::Chunk;
 use crate::bytecode::opcode::OpCode;
 use crate::bytecode::value::Value;
@@ -29,7 +31,12 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 print_constant(chunk, offset + 1)?;
                 offset + 2
             }
-            OpCode::DefineGlobal | OpCode::GlobalGet | OpCode::GlobalSet | OpCode::Class => {
+            OpCode::DefineGlobal
+            | OpCode::GlobalGet
+            | OpCode::GlobalSet
+            | OpCode::Class
+            | OpCode::PropertyGet
+            | OpCode::PropertySet => {
                 print_variable(chunk, offset + 1)?;
                 offset + 2
             }
@@ -78,11 +85,12 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             OpCode::Closure => {
                 let mut i = offset + 1;
                 let value = get_constant(chunk, i)?;
-                if let Value::Func(function) = value {
+                i += 1;
+                if let Value::Func(function) = value.as_ref() {
                     print!("{}", format!("<fn {}>", function.name()).bright_yellow());
                     for _ in 0..function.upvalue_count {
-                        let is_local = get_byte(chunk, i + 1)?;
-                        let addr = get_byte(chunk, i + 2)?;
+                        let is_local = get_byte(chunk, i)?;
+                        let addr = get_byte(chunk, i + 1)?;
                         println!("");
                         print_offset(i);
                         print_upvalue(is_local == 1, addr);
@@ -115,8 +123,8 @@ fn print_opcode<T: ToString>(name: T) {
     print!("{:<24}", name.to_string().bright_blue());
 }
 
-fn print_value(value: Value) {
-    let formatted = format!("{value}");
+fn print_value(value: &Rc<Value>) {
+    let formatted = format!("{}", value.as_ref());
     print!("{}", formatted.bright_yellow())
 }
 
@@ -130,7 +138,7 @@ fn get_byte(chunk: &Chunk, index: usize) -> LoxResult<u8> {
     })
 }
 
-fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
+fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<&Rc<Value>> {
     let constant_addr = get_byte(chunk, index)?;
     chunk.get_constant(constant_addr as usize).ok_or_else(|| {
         LoxError::Runtime(RuntimeError {
@@ -143,7 +151,7 @@ fn get_constant(chunk: &Chunk, index: usize) -> LoxResult<Value> {
 
 fn print_variable(chunk: &Chunk, index: usize) -> LoxResult<()> {
     let value = get_constant(chunk, index)?;
-    if let Value::String(value) = value {
+    if let Value::String(value) = value.as_ref() {
         print!("{}", value.bright_purple())
     }
     Ok(())

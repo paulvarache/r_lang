@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -16,11 +17,12 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeErrorCode;
 
 use super::call_frame::CallFrame;
+use super::instance::Instance;
 use super::value::NativeFunction;
 
 pub struct VM {
-    stack: Vec<Value>,
-    globals: HashMap<String, Value>,
+    stack: Vec<Rc<Value>>,
+    globals: HashMap<String, Rc<Value>>,
     pub frames: Vec<CallFrame>,
     closure_upvalues: HashMap<usize, HashMap<u8, Upvalue>>,
 }
@@ -31,7 +33,7 @@ macro_rules! expr {
     };
 }
 
-fn native_clock(_args: Vec<Value>) -> Value {
+fn native_clock(_args: Vec<Rc<Value>>) -> Value {
     Value::Number(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -70,7 +72,7 @@ impl VM {
             macro_rules! guard_number_binary_op {
                 () => {{
                     if !matches!(
-                        (self.peek(0), self.peek(1)),
+                        (self.peek(0).as_ref(), self.peek(1).as_ref()),
                         (&Value::Number(_), &Value::Number(_))
                     ) {
                         return Err(self.error(
@@ -86,7 +88,7 @@ impl VM {
                         guard_number_binary_op!();
                         let right = self.pop();
                         let left = self.pop();
-                        self.push(expr!(&left $op &right));
+                        self.push(expr!(Rc::new(left.as_ref() $op right.as_ref())));
                     }
                 };
             }
@@ -102,16 +104,15 @@ impl VM {
             match op {
                 OpCode::Constant => {
                     let value = current_frame.read_constant()?;
-                    self.push(value);
+                    self.push(Rc::clone(value));
                 }
                 OpCode::ConstantLong => {
                     let value = current_frame.read_constant_long()?;
-                    self.push(value);
+                    self.push(Rc::clone(value));
                 }
                 OpCode::Return => {
                     let result = self.pop();
                     if self.frames.len() == 0 {
-                        self.pop();
                         return Ok(());
                     }
                     let last_local_addr = current_frame.slots_offset.clone();
@@ -119,13 +120,14 @@ impl VM {
                     let len = last_local_addr - 1;
                     self.stack.truncate(len);
                     self.push(result);
+                    self.closure_upvalues.remove(&current_frame.closure.id);
                     current_frame = self.pop_frame();
                 }
                 OpCode::Negate => {
                     let last_index = self.stack.len() - 1;
-                    let value = &self.stack[last_index];
+                    let value = self.stack[last_index].as_ref();
                     if matches!(value, &Value::Number(_)) {
-                        self.stack[last_index] = -value;
+                        self.stack[last_index] = Rc::new(-value);
                     } else {
                         return Err(
                             self.error(current_frame, RuntimeErrorCode::UnaryMinusInvalidType)
@@ -134,10 +136,10 @@ impl VM {
                 }
                 OpCode::Add => {
                     if !matches!(
-                        (self.peek(0), self.peek(1)),
+                        (self.peek(0).as_ref(), self.peek(1).as_ref()),
                         (&Value::Number(_), &Value::Number(_))
                     ) && !matches!(
-                        (self.peek(0), self.peek(1)),
+                        (self.peek(0).as_ref(), self.peek(1).as_ref()),
                         (&Value::String(_), &Value::String(_))
                     ) {
                         return Err(self.error(
@@ -147,34 +149,34 @@ impl VM {
                     }
                     let right = self.pop();
                     let left = self.pop();
-                    self.push(&left + &right);
+                    self.push(Rc::new(left.as_ref() + right.as_ref()));
                 }
                 OpCode::Subtract => number_binary_op!(-),
                 OpCode::Multiply => number_binary_op!(*),
                 OpCode::Divide => number_binary_op!(/),
-                OpCode::Nil => self.push(Value::Nil),
-                OpCode::True => self.push(Value::Bool(true)),
-                OpCode::False => self.push(Value::Bool(false)),
+                OpCode::Nil => self.push(Rc::new(Value::Nil)),
+                OpCode::True => self.push(Rc::new(Value::Bool(true))),
+                OpCode::False => self.push(Rc::new(Value::Bool(false))),
                 OpCode::Not => {
                     let last_index = self.stack.len() - 1;
-                    self.stack[last_index] = Value::Bool(self.peek(0).is_falsey());
+                    self.stack[last_index] = Rc::new(Value::Bool(self.peek(0).is_falsey()));
                 }
                 OpCode::Equal => {
                     let right = self.pop();
                     let left = self.pop();
-                    self.push(Value::Bool(&left == &right));
+                    self.push(Rc::new(Value::Bool(left.as_ref() == right.as_ref())));
                 }
                 OpCode::Greater => {
                     guard_number_binary_op!();
                     let right = self.pop();
                     let left = self.pop();
-                    self.push(Value::Bool(&left > &right));
+                    self.push(Rc::new(Value::Bool(left.as_ref() > right.as_ref())));
                 }
                 OpCode::Less => {
                     guard_number_binary_op!();
                     let right = self.pop();
                     let left = self.pop();
-                    self.push(Value::Bool(&left < &right));
+                    self.push(Rc::new(Value::Bool(left.as_ref() < right.as_ref())));
                 }
                 OpCode::Print => println!("{}", self.pop()),
                 OpCode::Pop => {
@@ -182,15 +184,15 @@ impl VM {
                 }
                 OpCode::DefineGlobal => {
                     let value = current_frame.read_constant()?;
-                    if let Value::String(name) = value {
+                    if let Value::String(name) = value.as_ref() {
                         let p = self.pop();
-                        self.globals.insert(name, p.clone());
+                        self.globals.insert(name.clone(), Rc::clone(&p));
                     }
                 }
                 OpCode::GlobalGet => {
                     let name = current_frame.read_constant()?;
-                    if let Value::String(name) = name {
-                        if let Some(value) = self.globals.get(&name) {
+                    if let Value::String(name) = name.as_ref() {
+                        if let Some(value) = self.globals.get(name) {
                             self.push(value.clone());
                         } else {
                             return Err(
@@ -201,14 +203,14 @@ impl VM {
                 }
                 OpCode::GlobalSet => {
                     let name = current_frame.read_constant()?;
-                    if let Value::String(name) = name {
-                        if !self.globals.contains_key(&name) {
+                    if let Value::String(name) = name.as_ref() {
+                        if !self.globals.contains_key(name) {
                             return Err(
                                 self.error(current_frame, RuntimeErrorCode::UndefinedGlobal)
                             );
                         }
                         let value = self.peek(0);
-                        self.globals.insert(name, value.clone());
+                        self.globals.insert(name.clone(), Rc::clone(value));
                     }
                 }
                 OpCode::Popn => {
@@ -252,7 +254,7 @@ impl VM {
                 }
                 OpCode::Closure => {
                     let value = current_frame.read_constant()?;
-                    if let Value::Func(function) = value {
+                    if let Value::Func(function) = value.as_ref() {
                         let closure = Closure::new(&function);
                         self.closure_upvalues.insert(closure.id, HashMap::new());
 
@@ -264,7 +266,7 @@ impl VM {
                                     self.capture_upvalue(current_frame.slots_offset as u8 + slot);
                                 let upvalues =
                                     self.closure_upvalues.get_mut(&closure.id).expect("");
-                                
+
                                 upvalues.insert(i, value);
                             } else {
                                 let current_value = self
@@ -279,7 +281,7 @@ impl VM {
                                 upvalues.insert(i, current_value);
                             }
                         }
-                        self.push(Value::Closure(closure));
+                        self.push(Rc::new(Value::Closure(closure)));
                     }
                 }
                 OpCode::UpvalueGet => {
@@ -292,7 +294,7 @@ impl VM {
                         Some(Upvalue::Open(stack_addr)) => {
                             self.push(self.stack[*stack_addr as usize].clone());
                         }
-                        Some(Upvalue::Closed(value)) => self.push(value.clone()),
+                        Some(Upvalue::Closed(value)) => self.push(Rc::clone(value)),
                         _ => {}
                     }
                 }
@@ -324,10 +326,35 @@ impl VM {
                 }
                 OpCode::Class => {
                     let name = current_frame.read_constant()?;
-                    if let Value::String(name) = name {
-                        self.push(Value::Class(Class::new(name)));
+                    if let Value::String(name) = name.as_ref() {
+                        self.push(Rc::new(Value::Class(Rc::new(Class::new(name.clone())))));
                     }
-                },
+                }
+                OpCode::PropertySet => {
+                    let name = current_frame.read_constant()?;
+                    let value = self.pop();
+                    let instance = self.pop();
+                    if let Value::Instance(instance) = instance.as_ref() {
+                        instance.set_field(&name, &value);
+                        self.push(value);
+                    } else {
+                        return Err(self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess));
+                    }
+                }
+                OpCode::PropertyGet => {
+                    let name = current_frame.read_constant()?;
+                    let instance = self.pop();
+                    if let Value::Instance(instance) = instance.as_ref() {
+                        let value = instance.get_field(&name);
+                        if let Some(value) = value {
+                            self.push(Rc::new(value));
+                        } else {
+                            return Err(self.error(current_frame, RuntimeErrorCode::UndefinedProperty));
+                        }
+                    } else {
+                        return Err(self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess));
+                    }
+                }
             }
             #[cfg(feature = "debug_trace_execution")]
             {
@@ -336,10 +363,10 @@ impl VM {
         }
         Ok(())
     }
-    fn push(&mut self, value: Value) {
+    fn push(&mut self, value: Rc<Value>) {
         self.stack.push(value);
     }
-    fn pop(&mut self) -> Value {
+    fn pop(&mut self) -> Rc<Value> {
         self.stack.pop().unwrap() // stacked in a way that this is a legitimate panic if it fails
     }
     fn call_value(
@@ -353,12 +380,18 @@ impl VM {
                 self.push_frame(current_frame);
                 self.call(closure.clone(), arg_count)
             }
+            Value::Class(class) => {
+                let instance = Value::Instance(Rc::new(Instance::new(class)));
+                let addr = self.stack.len() - arg_count as usize - 1;
+                self.stack[addr] = Rc::new(instance);
+                Ok(current_frame)
+            }
             Value::Native(native) => {
                 let end = self.stack.len();
                 let start = end - arg_count as usize;
-                let args: Vec<Value> = self.stack.drain(start..end).collect();
+                let args: Vec<Rc<Value>> = self.stack.drain(start..end).collect();
                 let value = native(args);
-                self.push(value);
+                self.push(Rc::new(value));
                 Ok(current_frame)
             }
             _ => Err(self.error(current_frame, RuntimeErrorCode::CallNonFunctionValue)),
@@ -377,9 +410,9 @@ impl VM {
         self.push_frame(CallFrame::new(closure, self.stack.len() as usize))
     }
     pub fn define_native(&mut self, name: &str, native: NativeFunction) {
-        self.globals.insert(name.to_string(), Value::Native(native));
+        self.globals.insert(name.to_string(), Rc::new(Value::Native(native)));
     }
-    fn peek(&self, n: usize) -> &Value {
+    fn peek(&self, n: usize) -> &Rc<Value> {
         &self.stack[self.stack.len() - 1 - n]
     }
     fn print_stack(&self) {

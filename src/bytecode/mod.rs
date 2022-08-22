@@ -13,3 +13,4 @@ mod function_compiler;
 pub mod closure;
 mod upvalue;
 mod class;
+mod instance;
