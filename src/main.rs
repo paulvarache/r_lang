@@ -71,27 +71,30 @@ impl Lox {
 
         let mut compiler = Compiler::new(Box::new(scanner));
 
-        let result = compiler.compile();
+        let mut errors = Vec::new();
 
-        let mut error = None;
-
-        match result {
+        match compiler.compile() {
             Ok(function) => {
                 self.vm.call_script(Closure::new(&Rc::new(function)));
 
                 match self.vm.run() {
                     Ok(_) => {}
-                    Err(e) => error = Some(e),
+                    Err(e) => errors.push(e),
                 }
             }
-            Err(e) => error = Some(e),
+            Err(e) => errors.extend(e),
         }
 
-        if let Some(err) = error {
+        let had_error = errors.is_empty();
+
+        for err in errors {
             println!("{}: {}", "error".red(), format!("{err}").bright_white());
             match err {
                 LoxError::Scanner(err) => {
                     println!("{}", compiler.scanner.format_error_loc(err.span));
+                }
+                LoxError::Compiler(err) => {
+                    println!("{}", compiler.scanner.format_error_loc(err.next_token.span));
                 }
                 LoxError::Runtime(err) => {
                     let span = compiler
@@ -99,7 +102,7 @@ impl Lox {
                         .unwrap_or_else(|| Span::default());
                     println!("{}", compiler.scanner.format_error_loc(span));
 
-                    for i in (0..self.vm.frames.len() - 1).rev() {
+                    for i in (0..self.vm.frames.len().saturating_sub(1)).rev() {
                         let frame = &self.vm.frames[i];
                         let span = compiler
                             .locate_byte(frame.closure.function.id(), frame.ip - 1)
@@ -107,14 +110,12 @@ impl Lox {
 
                         println!("{}", compiler.scanner.format_backtrace_line(span));
                     }
-                    // TODO: use vm to extract backtrace
                 }
-                _ => {}
             }
             println!();
         }
 
-        return false;
+        return !had_error;
     }
 }
 

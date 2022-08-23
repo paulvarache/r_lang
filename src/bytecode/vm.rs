@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::f64::consts::PI;
+use std::fs;
 use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -33,13 +35,35 @@ macro_rules! expr {
     };
 }
 
-fn native_clock(_args: Vec<Value>) -> Value {
+fn native_std_date_seconds(_args: Vec<Value>) -> Value {
     Value::Number(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time is before Unix Epoch x.x")
-            .as_secs_f64(),
+            .as_secs_f64()
+            .round(),
     )
+}
+fn native_std_date_milliseconds(_args: Vec<Value>) -> Value {
+    Value::Number(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time is before Unix Epoch x.x")
+            .as_millis() as f64,
+    )
+}
+
+fn native_std_fs_read_file(args: Vec<Value>) -> Value {
+    let path = args.first();
+    if let Some(path) = path {
+        if let Value::String(path) = path {
+            Value::String(fs::read_to_string(path).expect("could not read file"))
+        } else {
+            panic!();
+        }
+    } else {
+        panic!();
+    }
 }
 
 impl VM {
@@ -51,7 +75,36 @@ impl VM {
             closure_upvalues: HashMap::new(),
         };
 
-        s.define_native("clock", native_clock);
+        macro_rules! native_math {
+            ($name:tt,$fn:ident) => {
+                s.define_native($name, |args| {
+                    let n = args.first();
+                    if let Some(n) = n {
+                        if let Value::Number(n) = n {
+                            Value::Number(f64::$fn(*n))
+                        } else {
+                            panic!();
+                        }
+                    } else {
+                        panic!();
+                    }
+                });
+            };
+        }
+
+        s.define_native("std::date::milliseconds", native_std_date_milliseconds);
+        s.define_native("std::date::seconds", native_std_date_seconds);
+        s.define_native("std::fs::read_file", native_std_fs_read_file);
+        native_math!("std::math::sqrt", sqrt);
+        native_math!("std::math::sin", sin);
+        native_math!("std::math::asin", asin);
+        native_math!("std::math::cos", cos);
+        native_math!("std::math::acos", acos);
+        native_math!("std::math::tan", tan);
+        native_math!("std::math::atan", atan);
+
+        s.globals
+            .insert("std::math::PI".to_string(), Value::Number(PI));
 
         s
     }

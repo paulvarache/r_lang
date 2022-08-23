@@ -89,6 +89,7 @@ impl<'a> Scan for Scanner<'a> {
                 b'.' => Ok(Some(self.get_token(TokenType::Dot))),
                 b'-' => Ok(Some(self.get_token(TokenType::Minus))),
                 b'+' => Ok(Some(self.get_token(TokenType::Plus))),
+                b':' => Ok(Some(self.get_token(TokenType::Colon))),
                 b';' => Ok(Some(self.get_token(TokenType::Semicolon))),
                 b'*' => Ok(Some(self.get_token(TokenType::Star))),
                 b'!' => Ok(Some(
@@ -416,6 +417,7 @@ impl<'a> Scanner<'a> {
     }
     fn get_keyword_token_type(&self, lexeme: &str) -> Option<TokenType> {
         match lexeme {
+            "use" => Some(TokenType::Use),
             "and" => Some(TokenType::And),
             "class" => Some(TokenType::Class),
             "else" => Some(TokenType::Else),
@@ -430,7 +432,7 @@ impl<'a> Scanner<'a> {
             "super" => Some(TokenType::Super),
             "this" => Some(TokenType::This),
             "true" => Some(TokenType::True),
-            "var" => Some(TokenType::Var),
+            "let" => Some(TokenType::Let),
             "while" => Some(TokenType::While),
             _ => None,
         }

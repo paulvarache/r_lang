@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use std::mem;
 use std::rc::Rc;
 
-use crate::error::LoxError;
-use crate::error::LoxResult;
 use crate::error::CompilerError;
 use crate::error::CompilerErrorCode;
+use crate::error::LoxError;
+use crate::error::LoxResult;
 use crate::scanner::span::Span;
 use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
@@ -39,6 +39,7 @@ pub struct Compiler<'a> {
     function_compiler: RefCell<FunctionCompiler>,
     class_compiler: ClassCompilerLink,
     sourcemaps: HashMap<usize, Sourcemap>,
+    use_declarations_finished: bool,
 }
 
 macro_rules! binary_rule {
@@ -80,15 +81,36 @@ impl<'a> Compiler<'a> {
             function_compiler: RefCell::new(FunctionCompiler::new("__", FunctionType::Script)),
             sourcemaps: HashMap::new(),
             class_compiler: None,
+            use_declarations_finished: false,
         }
     }
-    pub fn compile(&mut self) -> LoxResult<Function> {
-        while self.peek()?.ttype != TokenType::Eof {
-            let result = self.declaration();
-            if let Err(err) = result {
-                self.synchronise()?;
-                return Err(err);
+    pub fn compile(&mut self) -> Result<Function, Vec<LoxError>> {
+        let mut errors = Vec::new();
+
+        loop {
+            match self.peek() {
+                Err(err) => {
+                    errors.push(err);
+                    return Err(errors);
+                }
+                Ok(next) => {
+                    if next.ttype == TokenType::Eof {
+                        break;
+                    }
+                    let result = self.declaration();
+                    if let Err(err) = result {
+                        errors.push(err);
+                        if let Err(err) = self.synchronise() {
+                            errors.push(err);
+                            return Err(errors);
+                        }
+                    }
+                }
             }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
         }
         self.end_compiler();
         let function_compiler = self
@@ -114,7 +136,7 @@ impl<'a> Compiler<'a> {
                     self.peek()?.ttype,
                     TokenType::Class
                         | TokenType::Fun
-                        | TokenType::Var
+                        | TokenType::Let
                         | TokenType::For
                         | TokenType::If
                         | TokenType::While
@@ -136,8 +158,8 @@ impl<'a> Compiler<'a> {
                 precedence: Precedence::Call,
             },
             TokenType::CloseParen => ParseRule::default(),
-            TokenType::OpenBrace => todo!(),
-            TokenType::CloseBrace => todo!(),
+            TokenType::OpenBrace => ParseRule::default(),
+            TokenType::CloseBrace => ParseRule::default(),
             TokenType::Comma => ParseRule::default(),
             TokenType::Dot => ParseRule {
                 prefix: None,
@@ -214,27 +236,105 @@ impl<'a> Compiler<'a> {
                 precedence: Precedence::None,
             },
             TokenType::True => literal_rule!(),
-            TokenType::Var => todo!(),
+            TokenType::Let => todo!(),
             TokenType::While => todo!(),
             TokenType::Eof => ParseRule {
                 prefix: None,
                 infix: None,
                 precedence: Precedence::None,
             },
+            TokenType::Colon => todo!(),
+            TokenType::Use => todo!(),
             TokenType::Undefined => panic!("undefined token for rule"),
         }
     }
     // declaration -> class_declaration
     //              | function_declaration
     //              | var_declaration
+    //              | use_declaration
     //              | statement;
     fn declaration(&mut self) -> LoxResult<()> {
         match self.peek()?.ttype {
-            TokenType::Class => self.class_declaration(),
-            TokenType::Fun => self.fun_declaration(),
-            TokenType::Var => self.var_declaration(),
-            _ => self.statement(),
+            TokenType::Use => self.use_declaration(),
+            TokenType::Class => {
+                self.use_declarations_finished = true;
+                self.class_declaration()
+            }
+            TokenType::Fun => {
+                self.use_declarations_finished = true;
+                self.fun_declaration()
+            }
+            TokenType::Let => {
+                self.use_declarations_finished = true;
+                self.var_declaration()
+            }
+            _ => {
+                self.use_declarations_finished = true;
+                self.statement()
+            }
         }
+    }
+    fn use_declaration(&mut self) -> LoxResult<()> {
+        if self.use_declarations_finished {
+            let err = self.error(CompilerErrorCode::NonHeaderUse);
+            self.skip()?; // Consume the use token, or synchronisation will loop on that error
+            return Err(err);
+        }
+        let use_token = self.advance()?;
+
+        let mut names = Vec::new();
+
+        loop {
+            let next = self.peek()?;
+            if next.ttype == TokenType::Identifier {
+                self.skip()?;
+                names.push(next.lexeme);
+                let next = self.peek()?;
+                match next.ttype {
+                    TokenType::Semicolon => {
+                        self.skip()?;
+                        break;
+                    }
+                    TokenType::Colon => {
+                        self.skip()?;
+                        self.consume(TokenType::Colon, CompilerErrorCode::MissingUseColon)?;
+                    }
+                    _ => {
+                        return Err(self.error(CompilerErrorCode::UnterminatedUse))?;
+                    }
+                }
+            } else {
+                return Err(self.error(CompilerErrorCode::UnterminatedUse))?;
+            }
+        }
+
+        let fn_name = names.last().unwrap().clone();
+
+        let const_addr = self
+            .function_compiler
+            .borrow_mut()
+            .identifer_constant(&Token::new(
+                TokenType::Identifier,
+                fn_name,
+                Span::new_from_range(use_token.span, self.last.span),
+            ));
+
+        self.named_variable(
+            &Token::new(
+                TokenType::Identifier,
+                names.join("::"),
+                Span::new_from_range(use_token.span, self.last.span),
+            ),
+            false,
+        )?;
+
+        self.emit_bytes(
+            OpCode::DefineGlobal,
+            const_addr,
+            Span::new_from_range(use_token.span, self.last.span),
+        );
+
+        Ok(())
     }
     fn class_declaration(&mut self) -> LoxResult<()> {
         let class_token = self.advance()?;
@@ -590,28 +690,35 @@ impl<'a> Compiler<'a> {
     }
     fn if_statement(&mut self) -> LoxResult<()> {
         let if_token = self.advance()?;
-        self.consume(
-            TokenType::OpenParen,
-            CompilerErrorCode::MissingOpenParenAfterIfKeyword,
-        )?;
         self.expression()?;
-        self.consume(
-            TokenType::CloseParen,
-            CompilerErrorCode::MissingClosingParenAfterIfPredicate,
-        )?;
 
         let then_jump = self.emit_jump(OpCode::JumpIfFalse, if_token.span);
         self.emit(OpCode::Pop, if_token.span);
-        self.statement()?;
+
+        self.branch()?;
         let else_jump = self.emit_jump(OpCode::Jump, if_token.span);
         self.patch_jump(then_jump)?;
         self.emit(OpCode::Pop, if_token.span);
         if self.peek()?.ttype == TokenType::Else {
             self.skip()?;
-            self.statement()?;
+            if self.peek()?.ttype == TokenType::If {
+                self.if_statement()?;
+            } else {
+                self.branch()?;
+            }
         }
         self.patch_jump(else_jump)?;
 
+        Ok(())
+    }
+    fn branch(&mut self) -> LoxResult<()> {
+        self.consume(
+            TokenType::OpenBrace,
+            CompilerErrorCode::MissingOpenBraceAfterIf,
+        )?;
+        self.begin_scope();
+        self.block()?;
+        self.end_scope();
         Ok(())
     }
     fn return_statement(&mut self) -> LoxResult<()> {
@@ -651,19 +758,11 @@ impl<'a> Compiler<'a> {
     fn while_statement(&mut self) -> LoxResult<()> {
         let loop_start = self.function_compiler.borrow().current_addr();
         let while_token = self.advance()?;
-        self.consume(
-            TokenType::OpenParen,
-            CompilerErrorCode::MissingOpenParenAfterWhileKeyword,
-        )?;
         self.expression()?;
-        self.consume(
-            TokenType::CloseParen,
-            CompilerErrorCode::MissingClosingParenAfterWhilePredicate,
-        )?;
 
         let exit_jump = self.emit_jump(OpCode::JumpIfFalse, while_token.span);
         self.emit(OpCode::Pop, while_token.span);
-        self.statement()?;
+        self.branch()?;
         self.emit_loop(loop_start, while_token.span)?;
 
         self.patch_jump(exit_jump)?;
@@ -680,7 +779,7 @@ impl<'a> Compiler<'a> {
         )?;
         match self.peek()?.ttype {
             TokenType::Semicolon => {}
-            TokenType::Var => self.var_declaration()?,
+            TokenType::Let => self.var_declaration()?,
             _ => self.expression()?,
         }
 
@@ -866,7 +965,10 @@ impl<'a> Compiler<'a> {
             return Err(self.error(CompilerErrorCode::SuperOutsideClass));
         }
         let super_token = self.last.clone();
-        self.consume(TokenType::Dot, CompilerErrorCode::MissingDotAfterSuperKeyword)?;
+        self.consume(
+            TokenType::Dot,
+            CompilerErrorCode::MissingDotAfterSuperKeyword,
+        )?;
         let name = self.consume(
             TokenType::Identifier,
             CompilerErrorCode::MissingIdentiferAfterSuperDot,
@@ -979,7 +1081,11 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
-    fn parse_precedence(&mut self, precedence: Precedence, code: CompilerErrorCode) -> LoxResult<()> {
+    fn parse_precedence(
+        &mut self,
+        precedence: Precedence,
+        code: CompilerErrorCode,
+    ) -> LoxResult<()> {
         let token = self.advance()?;
         let rule = self.get_rule(token.ttype);
         let prefix = rule.prefix.ok_or_else(|| self.error(code))?;

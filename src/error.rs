@@ -73,6 +73,10 @@ pub enum CompilerErrorCode {
     InheritFromSelf,
     SuperOutsideChildClass,
     SuperOutsideClass,
+    MissingOpenBraceAfterIf,
+    MissingUseColon,
+    UnterminatedUse,
+    NonHeaderUse,
 }
 
 #[derive(Debug)]
@@ -331,7 +335,7 @@ impl Demistify for CompilerError {
                 "could not read local variable '{}', this variable is not initialized yet",
                 self.token.demistify()
             ),
-            CompilerErrorCode::MissingClosingParenAfterIfPredicate => format!("expected ')' after if predicate,{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingClosingParenAfterIfPredicate => format!("expected ')' after if predicate{}", self.demistify_next_token()),
             CompilerErrorCode::JumpTooLong => "jump is too long".to_string(),
             CompilerErrorCode::TopLevelReturn => "cannot return outside a function".to_string(),
             CompilerErrorCode::MissingOpenBraceAfterClassDeclaration => format!("expected '}}' after class declaration{}", self.demistify_next_token()),
@@ -339,7 +343,11 @@ impl Demistify for CompilerError {
             CompilerErrorCode::InitializerReturnValue => "cannot return value inside initializer".to_string(),
             CompilerErrorCode::InheritFromSelf => "cannot inherit yourself".to_string(),
             CompilerErrorCode::SuperOutsideChildClass => "cannot use 'super' in class without a parent".to_string(),
-            CompilerErrorCode::SuperOutsideClass => "cannot use 'super' outside a class method".to_string(), // c => format!("missing error demistifyer for {}", c as u32),
+            CompilerErrorCode::SuperOutsideClass => "cannot use 'super' outside a class method".to_string(),
+            CompilerErrorCode::MissingOpenBraceAfterIf => format!("expected '{{' after if predicate{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingUseColon => format!("expected ':' after first ':'{}", self.demistify_next_token()),
+            CompilerErrorCode::UnterminatedUse => format!("expected correctly formatted use{}", self.demistify_next_token()),
+            CompilerErrorCode::NonHeaderUse => "use declarations can only appear at the top of a file".to_string(),
         }
     }
 }

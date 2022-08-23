@@ -5,7 +5,7 @@ pub enum TokenType {
     #[default]
     Undefined,
     OpenParen, CloseParen, OpenBrace, CloseBrace,
-    Comma, Dot, Minus, Plus, Semicolon, Slash, Star,
+    Comma, Dot, Minus, Plus, Colon, Semicolon, Slash, Star,
 
     Bang, BangEqual,
     Equal, EqualEqual,
@@ -15,9 +15,9 @@ pub enum TokenType {
     Identifier, String, Number,
 
     And, Class, Else, False, Fun, For, If, Nil, Or,
-    Print, Return, Super, This, True, Var, While,
+    Print, Return, Super, This, True, Let, While, Use,
 
-    Eof
+    Eof,
 }
 
 impl fmt::Display for TokenType {
