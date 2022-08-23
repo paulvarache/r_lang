@@ -4,8 +4,9 @@ use super::value::Value;
 
 #[derive(Debug, Clone)]
 pub enum Upvalue {
+    None,
     Open(u8),
-    Closed(Value),
+    Closed(Rc<Value>),
 }
 
 // Stored on the heap using a Vec<Upvalue> inside a HashMap<usize, Vec<Upvalue>>. Key of the hasmap is

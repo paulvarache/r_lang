@@ -3,13 +3,13 @@ use super::function::FunctionType;
 use super::local::Local;
 use super::opcode::OpCode;
 use super::sourcemap::Sourcemap;
-use crate::error::ParserErrorCode;
+use crate::error::CompilerErrorCode;
 use crate::scanner::span::Span;
 use crate::scanner::token::Token;
 
 use super::value::Value;
 
-type ParseResult<T> = Result<T, ParserErrorCode>;
+type ParseResult<T> = Result<T, CompilerErrorCode>;
 
 pub struct FunctionCompiler {
     arity: u8,
@@ -111,7 +111,7 @@ impl FunctionCompiler {
             }
 
             if local.name == name.lexeme {
-                return Err(ParserErrorCode::LocalAlreadyDefined);
+                return Err(CompilerErrorCode::LocalAlreadyDefined);
             }
         }
         self.add_local(name)
@@ -125,7 +125,7 @@ impl FunctionCompiler {
     }
     pub fn add_local(&mut self, name: &Token) -> ParseResult<()> {
         if self.locals.len() == u8::MAX.into() {
-            return Err(ParserErrorCode::TooManyLocals);
+            return Err(CompilerErrorCode::TooManyLocals);
         }
         self.locals.push(Local::new(name.lexeme.clone()));
         Ok(())
@@ -136,7 +136,7 @@ impl FunctionCompiler {
             let local = &self.locals[i];
             if local.name == name.lexeme {
                 if local.depth.is_none() {
-                    return Err(ParserErrorCode::ReadOwnLocalBeforeInitialized);
+                    return Err(CompilerErrorCode::ReadOwnLocalBeforeInitialized);
                 }
                 return Ok(Some(i as u8));
             }
@@ -166,7 +166,7 @@ impl FunctionCompiler {
             }
         }
         if self.upvalues.len() == 255 {
-            return Err(ParserErrorCode::TooManyLocals);
+            return Err(CompilerErrorCode::TooManyLocals);
         }
         let upvalue = (is_local, addr);
         let upvalue_addr = self.upvalues.len();
@@ -195,7 +195,7 @@ impl FunctionCompiler {
         let jump = (self.current_addr() - addr - 2) as u16;
 
         if jump > u16::MAX {
-            return Err(ParserErrorCode::JumpTooLong);
+            return Err(CompilerErrorCode::JumpTooLong);
         }
 
         self.chunk.write_at(addr, (jump >> 8) as u8 & 0xFF);
@@ -208,7 +208,7 @@ impl FunctionCompiler {
 
         let offset = (self.current_addr() - addr + 2) as u16;
         if offset > u16::MAX {
-            return Err(ParserErrorCode::JumpTooLong);
+            return Err(CompilerErrorCode::JumpTooLong);
         }
 
         self.emit((offset >> 8) as u8 & 0xFF, span);

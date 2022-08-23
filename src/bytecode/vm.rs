@@ -17,7 +17,6 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeErrorCode;
 
 use super::call_frame::CallFrame;
-use super::closure;
 use super::instance::Instance;
 use super::value::NativeFunction;
 
@@ -25,7 +24,7 @@ pub struct VM {
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
     pub frames: Vec<CallFrame>,
-    closure_upvalues: HashMap<usize, HashMap<u8, Upvalue>>,
+    closure_upvalues: HashMap<usize, Vec<Upvalue>>,
 }
 
 macro_rules! expr {
@@ -257,7 +256,10 @@ impl VM {
                     let value = current_frame.read_constant()?;
                     if let Value::Func(function) = value {
                         let closure = Closure::new(&function);
-                        self.closure_upvalues.insert(closure.id, HashMap::new());
+                        self.closure_upvalues.insert(
+                            closure.id,
+                            vec![Upvalue::None; closure.function.upvalue_count as usize],
+                        );
 
                         for i in 0..closure.function.upvalue_count {
                             let is_local = current_frame.read_byte()?;
@@ -268,18 +270,16 @@ impl VM {
                                 let upvalues =
                                     self.closure_upvalues.get_mut(&closure.id).expect("");
 
-                                upvalues.insert(i, value);
+                                upvalues[i as usize] = value;
                             } else {
                                 let current_value = self
                                     .closure_upvalues
                                     .get(&current_frame.closure.id)
-                                    .expect("")
-                                    .get(&slot)
-                                    .unwrap()
+                                    .expect("")[slot as usize]
                                     .clone();
                                 let upvalues =
                                     self.closure_upvalues.get_mut(&closure.id).expect("");
-                                upvalues.insert(i, current_value);
+                                upvalues[i as usize] = current_value;
                             }
                         }
                         self.push(Value::Closure(Rc::new(closure)));
@@ -291,11 +291,11 @@ impl VM {
                         .closure_upvalues
                         .get(&current_frame.closure.id)
                         .expect("");
-                    match &upvalues.get(&slot) {
-                        Some(Upvalue::Open(stack_addr)) => {
+                    match &upvalues[slot as usize] {
+                        Upvalue::Open(stack_addr) => {
                             self.push(self.stack[*stack_addr as usize].clone());
                         }
-                        Some(Upvalue::Closed(value)) => self.push(value.clone()),
+                        Upvalue::Closed(value) => self.push(value.as_ref().clone()),
                         _ => {}
                     }
                 }
@@ -308,22 +308,17 @@ impl VM {
                         .get_mut(&current_closure_id)
                         .expect("");
                     // Closed upvalue manages its updates on the heap (closure_upvalues)
-                    if matches!(upvalues.get(&slot), Some(Upvalue::Closed(_))) {
-                        upvalues.insert(slot, Upvalue::Closed(value));
-                    } else if let Some(Upvalue::Open(stack_addr)) = upvalues.get(&slot) {
+                    if matches!(upvalues[slot as usize], Upvalue::Closed(_)) {
+                        upvalues[slot as usize] = Upvalue::Closed(Rc::new(value));
+                    } else if let Upvalue::Open(stack_addr) = upvalues[slot as usize] {
                         // Open upvalues contain the address of the value on the stack
-                        self.stack[*stack_addr as usize] = value;
+                        self.stack[stack_addr as usize] = value;
                     }
                 }
                 OpCode::CloseUpvalue => {
-                    let addr = current_frame.ip;
-                    let value = self.pop();
-                    let current_closure_id = current_frame.closure.id;
-                    let upvalues = self
-                        .closure_upvalues
-                        .get_mut(&current_closure_id)
-                        .expect("");
-                    upvalues.insert(addr as u8, Upvalue::Closed(value));
+                    let addr = self.stack.len() - 1;
+                    self.close_upvalues(addr);
+                    self.pop();
                 }
                 OpCode::Class => {
                     let name = current_frame.read_constant()?;
@@ -369,6 +364,55 @@ impl VM {
                         self.define_method(name.clone());
                     }
                 }
+                OpCode::Invoke => {
+                    let method_name = current_frame.read_constant()?.clone();
+                    let arg_count = current_frame.read_byte()?;
+                    if let Value::String(name) = method_name {
+                        current_frame = self.invoke(current_frame, &name, arg_count)?;
+                    }
+                }
+                OpCode::SuperInvoke => {
+                    let method_name = current_frame.read_constant()?.clone();
+                    let arg_count = current_frame.read_byte()?;
+                    let superclass = self.pop();
+                    if let Value::Class(superclass) = superclass {
+                        if let Value::String(name) = method_name {
+                            current_frame = self.invoke_from_class(
+                                current_frame,
+                                &superclass,
+                                &name,
+                                arg_count,
+                            )?;
+                        }
+                    } else {
+                        panic!("still there");
+                    }
+                }
+                OpCode::Inherit => {
+                    let superclass = self.peek(1);
+                    let class = self.peek(0);
+                    if let Value::Class(class) = class {
+                        if let Value::Class(superclass) = superclass {
+                            class.inherit_from(superclass);
+                            self.pop();
+                        } else {
+                            return Err(
+                                self.error(current_frame, RuntimeErrorCode::NonClassInherit)
+                            );
+                        }
+                    }
+                }
+                OpCode::SuperGet => {
+                    let name = current_frame.read_constant()?;
+                    let superclass = self.pop();
+                    if let Value::Class(superclass) = superclass {
+                        if !self.bind_method(&superclass, name) {
+                            return Err(
+                                self.error(current_frame, RuntimeErrorCode::UndefinedProperty)
+                            );
+                        }
+                    }
+                }
             }
             #[cfg(feature = "debug_trace_execution")]
             {
@@ -408,7 +452,10 @@ impl VM {
                     self.push_frame(current_frame);
                     return self.call(&init_closure, arg_count);
                 } else if arg_count != 0 {
-                    return Err(self.error(current_frame, RuntimeErrorCode::ClassInitializerArityMismatch))
+                    return Err(self.error(
+                        current_frame,
+                        RuntimeErrorCode::ClassInitializerArityMismatch,
+                    ));
                 }
                 Ok(current_frame)
             }
@@ -432,7 +479,10 @@ impl VM {
         Ok(new_frame)
     }
     pub fn call_script(&mut self, closure: Closure) {
-        self.closure_upvalues.insert(closure.id, HashMap::new());
+        self.closure_upvalues.insert(
+            closure.id,
+            vec![Upvalue::None; closure.function.upvalue_count as usize],
+        );
         let cl = Rc::new(closure);
         self.push(Value::Closure(Rc::clone(&cl)));
         self.push_frame(CallFrame::new(&cl, self.stack.len() as usize - 1))
@@ -453,7 +503,7 @@ impl VM {
         LoxError::Runtime(RuntimeError {
             func_id: current_frame.closure.function.id(),
             code,
-            addr: current_frame.ip - 1,
+            addr: current_frame.ip.saturating_sub(1),
         })
     }
 
@@ -467,13 +517,11 @@ impl VM {
         for id in closure_ids {
             let upvalues = self.closure_upvalues.get_mut(&id).unwrap();
 
-            let keys: Vec<u8> = upvalues.keys().map(|k| k.clone()).collect();
-
-            for k in keys {
-                if let Some(Upvalue::Open(addr)) = upvalues.get(&k) {
-                    if *addr >= last_addr as u8 {
-                        let value = self.stack[*addr as usize].clone();
-                        upvalues.insert(k, Upvalue::Closed(value));
+            for i in 0..upvalues.len() {
+                if let Upvalue::Open(addr) = upvalues[i] {
+                    if addr >= last_addr as u8 {
+                        let value = self.stack[addr as usize].clone();
+                        upvalues[i] = Upvalue::Closed(Rc::new(value));
                     }
                 }
             }
@@ -503,5 +551,41 @@ impl VM {
             }
         }
         return false;
+    }
+
+    pub fn invoke(
+        &mut self,
+        current_frame: CallFrame,
+        name: &String,
+        arg_count: u8,
+    ) -> LoxResult<CallFrame> {
+        let value = self.peek(0).clone();
+        if let Value::Instance(instance) = value.clone() {
+            if let Some(field) = instance.fields.borrow().get(name) {
+                // Field exists, call that\
+                let addr = self.stack.len() - arg_count as usize - 1;
+                self.stack[addr] = value;
+                self.call_value(current_frame, &field, arg_count)
+            } else {
+                self.invoke_from_class(current_frame, &instance.class, name, arg_count)
+            }
+        } else {
+            Err(self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess))
+        }
+    }
+
+    fn invoke_from_class(
+        &mut self,
+        current_frame: CallFrame,
+        class: &Rc<Class>,
+        name: &String,
+        arg_count: u8,
+    ) -> LoxResult<CallFrame> {
+        let method = class.get_method(name);
+        if let Some(method) = method {
+            self.call(&method, arg_count)
+        } else {
+            Err(self.error(current_frame, RuntimeErrorCode::UndefinedProperty))
+        }
     }
 }

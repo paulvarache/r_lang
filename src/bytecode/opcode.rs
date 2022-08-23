@@ -38,4 +38,8 @@ pub enum OpCode {
     PropertySet,
     PropertyGet,
     Method,
+    Invoke,
+    Inherit,
+    SuperGet,
+    SuperInvoke,
 }

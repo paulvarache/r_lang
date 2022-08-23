@@ -34,6 +34,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::GlobalSet
             | OpCode::Class
             | OpCode::Method
+            | OpCode::SuperGet
             | OpCode::PropertyGet
             | OpCode::PropertySet => {
                 print_variable(chunk, offset + 1)?;
@@ -66,6 +67,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::Print
             | OpCode::Pop
             | OpCode::CloseUpvalue
+            | OpCode::Inherit
             | OpCode::False => offset + 1,
             OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop => {
                 let n1 = get_byte(chunk, offset + 1)?;
@@ -80,6 +82,12 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                 let arg_count = get_byte(chunk, offset + 1)?;
                 print!("{} args", arg_count.to_string().bright_green());
                 offset + 2
+            }
+            OpCode::Invoke | OpCode::SuperInvoke => {
+                print_variable(chunk, offset + 1)?;
+                let arg_count = get_byte(chunk, offset + 2)?;
+                print!("{} args", arg_count.to_string().bright_green());
+                offset + 3
             }
             OpCode::Closure => {
                 let mut i = offset + 1;

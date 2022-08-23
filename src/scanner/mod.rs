@@ -1,15 +1,12 @@
 pub mod span;
 pub mod token;
 pub mod token_type;
-pub mod value;
 
 use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 
-use colored::Color;
-use colored::ColoredString;
 use colored::Colorize;
 
 use crate::error::Demistify;
@@ -18,7 +15,6 @@ use crate::error::LoxErrorCode;
 use crate::error::LoxResult;
 use crate::error::ScannerError;
 use crate::error::ScannerErrorCode;
-use crate::scanner::value::Value;
 
 use self::span::Span;
 use self::token::Token;
@@ -28,11 +24,9 @@ impl Demistify for ScannerError {
     fn demistify(&self) -> String {
         match self.code {
             LoxErrorCode::Scanner(code) => match code {
-                ScannerErrorCode::NumberParsingError => "could not parse number".to_string(),
                 ScannerErrorCode::UnterminatedString => "unterminated string".to_string(),
                 ScannerErrorCode::Unknown => "".to_string(),
             },
-            // _ => "".to_string(),
         }
     }
 }
@@ -159,12 +153,21 @@ impl<'a> Scan for Scanner<'a> {
             };
 
             let line_start = line.chars().take(start_col - 1).collect::<String>();
-            let line_highlight = line.chars().skip(start_col - 1).take(end_col - start_col).collect::<String>();
+            let line_highlight = line
+                .chars()
+                .skip(start_col - 1)
+                .take(end_col - start_col)
+                .collect::<String>();
             let line_end = line.chars().skip(end_col - 1).collect::<String>();
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
 
-            res.push(format!(" {line_prefix} {}{}{}", line_start.dimmed(), line_highlight, line_end.dimmed()));
+            res.push(format!(
+                " {line_prefix} {}{}{}",
+                line_start.dimmed(),
+                line_highlight,
+                line_end.dimmed()
+            ));
         }
         res.join("\n")
     }
@@ -187,7 +190,11 @@ impl<'a> Scan for Scanner<'a> {
 
             let nil = "";
             let underline = format!("{nil:^<0$}", end_col - start_col).red();
-            let fill = format!("{nil:0$}{underline}{nil:1$}", start_col - 1, line.len() - (end_col - 1));
+            let fill = format!(
+                "{nil:0$}{underline}{nil:1$}",
+                start_col - 1,
+                line.len() - (end_col - 1)
+            );
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
             let underline_prefix = format!("{:01$} |", "", max_pad).cyan();
@@ -302,16 +309,10 @@ impl<'a> Scanner<'a> {
     }
     fn get_token(&mut self, ttype: TokenType) -> Token {
         let span = self.span();
-        Token::new(ttype, self.consume(), span, None)
+        Token::new(ttype, self.consume(), span)
     }
-    fn get_token_literal(
-        &mut self,
-        ttype: TokenType,
-        lexeme: String,
-        span: Span,
-        literal: Value,
-    ) -> Token {
-        Token::new(ttype, lexeme, span, Some(literal))
+    fn get_token_literal(&mut self, ttype: TokenType, lexeme: String, span: Span) -> Token {
+        Token::new(ttype, lexeme, span)
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
         loop {
@@ -335,7 +336,6 @@ impl<'a> Scanner<'a> {
                         TokenType::String,
                         s.clone(),
                         span,
-                        Value::String(s),
                     )));
                 }
             }
@@ -366,15 +366,11 @@ impl<'a> Scanner<'a> {
         }
         let span = self.span();
         let s = self.consume();
-        match s.parse::<f64>() {
-            Err(_) => Err(self.error(ScannerErrorCode::NumberParsingError)),
-            Ok(n) => Ok(Some(self.get_token_literal(
-                TokenType::Number,
-                s,
-                span,
-                Value::Number(n),
-            ))),
-        }
+        Ok(Some(self.get_token_literal(
+            TokenType::Number,
+            s,
+            span,
+        )))
     }
     fn get_identifier(&mut self) -> Result<Option<Token>, LoxError> {
         loop {
@@ -393,7 +389,7 @@ impl<'a> Scanner<'a> {
             .get_keyword_token_type(&lexeme)
             .unwrap_or(TokenType::Identifier);
 
-        Ok(Some(Token::new(ttype, lexeme, span, None)))
+        Ok(Some(Token::new(ttype, lexeme, span)))
     }
     fn skip_comment(&mut self) {
         loop {
@@ -445,7 +441,6 @@ impl<'a> Scanner<'a> {
 mod tests {
     use stringreader::StringReader;
 
-    use crate::scanner::value::Value;
     use crate::scanner::Scan;
 
     use super::Scanner;
@@ -473,9 +468,7 @@ mod tests {
         let opt = result.ok().unwrap();
         assert!(opt.is_some());
         let opt_inner = opt.unwrap();
-        assert!(opt_inner.literal.is_some());
-        let literal = opt_inner.literal.unwrap();
-        assert_eq!(literal, Value::String("hello".to_string()));
+        assert_eq!(opt_inner.lexeme, "hello");
     }
     #[test]
     fn string_token_seq() {
@@ -489,9 +482,7 @@ mod tests {
             let opt = result.ok().unwrap();
             assert!(opt.is_some());
             let opt_inner = opt.unwrap();
-            assert!(opt_inner.literal.is_some());
-            let literal = opt_inner.literal.unwrap();
-            assert_eq!(literal, Value::String(i.to_string()));
+            assert_eq!(opt_inner.lexeme, i);
         }
     }
 

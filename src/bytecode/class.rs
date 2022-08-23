@@ -23,4 +23,13 @@ impl Class {
     pub fn get_method(&self, name: &String) -> Option<Rc<Closure>> {
         self.methods.borrow().get(name).map(|c| c.clone())
     }
+    pub fn inherit_from(&self, superclass: &Rc<Class>) {
+        self.methods.borrow_mut().extend(
+            superclass
+                .methods
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+    }
 }

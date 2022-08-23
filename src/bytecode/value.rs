@@ -9,7 +9,6 @@ use std::rc::Rc;
 use super::class::Class;
 use super::closure::Closure;
 use super::function::Function;
-use super::instance;
 use super::instance::Instance;
 
 pub type NativeFunction = fn(args: Vec<Value>) -> Value;

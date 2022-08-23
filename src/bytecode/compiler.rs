@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use crate::error::LoxError;
 use crate::error::LoxResult;
-use crate::error::ParserError;
-use crate::error::ParserErrorCode;
+use crate::error::CompilerError;
+use crate::error::CompilerErrorCode;
 use crate::scanner::span::Span;
 use crate::scanner::token::Token;
 use crate::scanner::token_type::TokenType;
@@ -203,7 +203,11 @@ impl<'a> Compiler<'a> {
             },
             TokenType::Print => ParseRule::default(),
             TokenType::Return => ParseRule::default(),
-            TokenType::Super => todo!(),
+            TokenType::Super => ParseRule {
+                prefix: Some(Compiler::super_),
+                infix: None,
+                precedence: Precedence::None,
+            },
             TokenType::This => ParseRule {
                 prefix: Some(Compiler::this),
                 infix: None,
@@ -236,7 +240,7 @@ impl<'a> Compiler<'a> {
         let class_token = self.advance()?;
         let name = self.consume(
             TokenType::Identifier,
-            ParserErrorCode::MissingIdentifierAfterClassKeyword,
+            CompilerErrorCode::MissingIdentifierAfterClassKeyword,
         )?;
         let class_name_addr = self
             .function_compiler
@@ -260,11 +264,52 @@ impl<'a> Compiler<'a> {
         self.class_compiler
             .replace(Box::new(ClassCompiler::new(current)));
 
+        let next = self.peek()?;
+        if next.ttype == TokenType::Less {
+            self.skip()?;
+            self.consume(
+                TokenType::Identifier,
+                CompilerErrorCode::MissingSuperclassName,
+            )?;
+            self.variable(false)?;
+            if name.lexeme == self.last.lexeme {
+                return Err(self.error(CompilerErrorCode::InheritFromSelf));
+            }
+
+            self.begin_scope();
+            let res = self.function_compiler.borrow_mut().add_local(&Token::new(
+                TokenType::Super,
+                "super".to_string(),
+                Span::default(),
+            ));
+
+            if let Err(code) = res {
+                return Err(self.error(code));
+            }
+
+            self.function_compiler
+                .borrow_mut()
+                .define_variable(0, Span::default());
+
+            self.named_variable(&name, false)?;
+            self.emit(OpCode::Inherit, next.span);
+
+            // Setting the value here.
+            // Take ownership of the conpiler to be able to write to it
+            // Then put it back if there was a value to start with
+
+            let current = self.class_compiler.take();
+            if let Some(mut class_compiler) = current {
+                class_compiler.has_superclass = true;
+                self.class_compiler.replace(class_compiler);
+            }
+        }
+
         self.named_variable(&name, false)?;
 
         self.consume(
             TokenType::OpenBrace,
-            ParserErrorCode::MissingOpenBraceAfterClassName,
+            CompilerErrorCode::MissingOpenBraceAfterClassName,
         )?;
 
         loop {
@@ -277,7 +322,7 @@ impl<'a> Compiler<'a> {
 
         self.consume(
             TokenType::CloseBrace,
-            ParserErrorCode::MissingOpenBraceAfterClassDeclaration,
+            CompilerErrorCode::MissingOpenBraceAfterClassDeclaration,
         )?;
 
         self.emit(
@@ -287,8 +332,11 @@ impl<'a> Compiler<'a> {
 
         let current = self.class_compiler.take();
 
-        if let Some(current) = current {
-            if let Some(enclosing) = current.enclosing {
+        if let Some(class_compiler) = current {
+            if class_compiler.has_superclass {
+                self.end_scope();
+            }
+            if let Some(enclosing) = class_compiler.enclosing {
                 self.class_compiler.replace(enclosing);
             }
         }
@@ -298,7 +346,7 @@ impl<'a> Compiler<'a> {
     fn method(&mut self) -> LoxResult<()> {
         let name = self.consume(
             TokenType::Identifier,
-            ParserErrorCode::MissingIdentifierAfterFunKeyword,
+            CompilerErrorCode::MissingIdentifierAfterFunKeyword,
         )?;
         let const_addr = self
             .function_compiler
@@ -316,7 +364,7 @@ impl<'a> Compiler<'a> {
     fn fun_declaration(&mut self) -> LoxResult<()> {
         let fun_token = self.advance()?;
         let (const_addr, name) =
-            self.parse_variable(ParserErrorCode::FunctionCallToManyArguments)?; //TODO: real error code
+            self.parse_variable(CompilerErrorCode::FunctionCallToManyArguments)?; //TODO: real error code
         self.function_compiler.borrow_mut().mark_initialized();
         self.function(FunctionType::Function, &name)?;
         let span = Span::new_from_range(fun_token.span, self.last.span);
@@ -340,16 +388,16 @@ impl<'a> Compiler<'a> {
 
         self.consume(
             TokenType::OpenParen,
-            ParserErrorCode::MissingOpenParenAfterFunIdentifier,
+            CompilerErrorCode::MissingOpenParenAfterFunIdentifier,
         )?;
         if self.peek()?.ttype != TokenType::CloseParen {
             loop {
                 if self.function_compiler.borrow().arity() == 255 {
-                    return Err(self.error(ParserErrorCode::FunctionCallToManyArguments));
+                    return Err(self.error(CompilerErrorCode::FunctionCallToManyArguments));
                 }
                 self.function_compiler.borrow_mut().increase_arity();
                 let (addr, name) =
-                    self.parse_variable(ParserErrorCode::UnterminatedArgumentList)?;
+                    self.parse_variable(CompilerErrorCode::UnterminatedArgumentList)?;
                 let span = Span::new_from_range(start.span, self.last.span);
                 self.function_compiler
                     .borrow_mut()
@@ -364,11 +412,11 @@ impl<'a> Compiler<'a> {
         }
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingClosingParenAfterArgumentList,
+            CompilerErrorCode::MissingClosingParenAfterArgumentList,
         )?;
         self.consume(
             TokenType::OpenBrace,
-            ParserErrorCode::MissingOpenBraceAfterFunctionDefinition,
+            CompilerErrorCode::MissingOpenBraceAfterFunctionDefinition,
         )?;
 
         self.block()?;
@@ -415,7 +463,7 @@ impl<'a> Compiler<'a> {
         // Add the name of the variable to the constants table, remember the address and span
         // to define it later
         let (var_addr, name) =
-            self.parse_variable(ParserErrorCode::MissingIdentifierAfterVarKeyword)?;
+            self.parse_variable(CompilerErrorCode::MissingIdentifierAfterVarKeyword)?;
         let token = self.peek()?;
         if token.ttype == TokenType::Equal {
             self.skip()?;
@@ -425,7 +473,7 @@ impl<'a> Compiler<'a> {
         }
         self.consume(
             TokenType::Semicolon,
-            ParserErrorCode::MissingSemicolonOrEqualAfterVarDeclaration,
+            CompilerErrorCode::MissingSemicolonOrEqualAfterVarDeclaration,
         )?;
         let span = Span::new_from_range(keywork_token.span, self.last.span);
         // Use the name constant address and span to emit the global define bytecode
@@ -434,7 +482,7 @@ impl<'a> Compiler<'a> {
             .define_variable(var_addr, span);
         Ok(())
     }
-    fn parse_variable(&mut self, code: ParserErrorCode) -> LoxResult<(u8, Token)> {
+    fn parse_variable(&mut self, code: CompilerErrorCode) -> LoxResult<(u8, Token)> {
         let name = self.consume(TokenType::Identifier, code)?;
         let res = self.function_compiler.borrow_mut().declare_variable(&name);
 
@@ -527,7 +575,7 @@ impl<'a> Compiler<'a> {
         while self.peek()?.ttype != TokenType::CloseBrace {
             self.declaration()?;
         }
-        self.consume(TokenType::CloseBrace, ParserErrorCode::UnterminatedBlock)?;
+        self.consume(TokenType::CloseBrace, CompilerErrorCode::UnterminatedBlock)?;
         Ok(())
     }
     fn print_statement(&mut self) -> LoxResult<()> {
@@ -535,7 +583,7 @@ impl<'a> Compiler<'a> {
         self.expression()?;
         self.consume(
             TokenType::Semicolon,
-            ParserErrorCode::MissingSemicolonAfterPrintStatement,
+            CompilerErrorCode::MissingSemicolonAfterPrintStatement,
         )?;
         self.emit(OpCode::Print, print_token.span);
         Ok(())
@@ -544,12 +592,12 @@ impl<'a> Compiler<'a> {
         let if_token = self.advance()?;
         self.consume(
             TokenType::OpenParen,
-            ParserErrorCode::MissingOpenParenAfterIfKeyword,
+            CompilerErrorCode::MissingOpenParenAfterIfKeyword,
         )?;
         self.expression()?;
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingClosingParenAfterIfPredicate,
+            CompilerErrorCode::MissingClosingParenAfterIfPredicate,
         )?;
 
         let then_jump = self.emit_jump(OpCode::JumpIfFalse, if_token.span);
@@ -572,7 +620,7 @@ impl<'a> Compiler<'a> {
             self.function_compiler.borrow().function_type,
             FunctionType::Script
         ) {
-            return Err(self.error(ParserErrorCode::TopLevelReturn));
+            return Err(self.error(CompilerErrorCode::TopLevelReturn));
         }
         let next = self.peek()?;
         if next.ttype == TokenType::Semicolon {
@@ -582,13 +630,16 @@ impl<'a> Compiler<'a> {
                 semicolon_token.span,
             ));
         } else {
-            if matches!(self.function_compiler.borrow().function_type, FunctionType::Initializer) {
-                return Err(self.error(ParserErrorCode::InitializerReturnValue));
+            if matches!(
+                self.function_compiler.borrow().function_type,
+                FunctionType::Initializer
+            ) {
+                return Err(self.error(CompilerErrorCode::InitializerReturnValue));
             }
             self.expression()?;
             let semicolon_token = self.consume(
                 TokenType::Semicolon,
-                ParserErrorCode::MissingSemicolonAfterReturnStatement,
+                CompilerErrorCode::MissingSemicolonAfterReturnStatement,
             )?;
             self.emit(
                 OpCode::Return,
@@ -602,12 +653,12 @@ impl<'a> Compiler<'a> {
         let while_token = self.advance()?;
         self.consume(
             TokenType::OpenParen,
-            ParserErrorCode::MissingOpenParenAfterWhileKeyword,
+            CompilerErrorCode::MissingOpenParenAfterWhileKeyword,
         )?;
         self.expression()?;
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingClosingParenAfterWhilePredicate,
+            CompilerErrorCode::MissingClosingParenAfterWhilePredicate,
         )?;
 
         let exit_jump = self.emit_jump(OpCode::JumpIfFalse, while_token.span);
@@ -625,7 +676,7 @@ impl<'a> Compiler<'a> {
         self.begin_scope();
         self.consume(
             TokenType::OpenParen,
-            ParserErrorCode::MissingOpenParenAfterWhileKeyword,
+            CompilerErrorCode::MissingOpenParenAfterWhileKeyword,
         )?;
         match self.peek()?.ttype {
             TokenType::Semicolon => {}
@@ -641,7 +692,7 @@ impl<'a> Compiler<'a> {
             self.expression()?;
             self.consume(
                 TokenType::Semicolon,
-                ParserErrorCode::MissingSemicolonAfterForIteration,
+                CompilerErrorCode::MissingSemicolonAfterForIteration,
             )?;
 
             exit_jump = Some(self.emit_jump(OpCode::JumpIfFalse, for_token.span));
@@ -655,7 +706,7 @@ impl<'a> Compiler<'a> {
             self.emit(OpCode::Pop, for_token.span);
             self.consume(
                 TokenType::CloseParen,
-                ParserErrorCode::MissingClosingParenAfterFor,
+                CompilerErrorCode::MissingClosingParenAfterFor,
             )?;
 
             self.emit_loop(loop_start, for_token.span)?;
@@ -678,13 +729,13 @@ impl<'a> Compiler<'a> {
         self.expression()?;
         let token = self.consume(
             TokenType::Semicolon,
-            ParserErrorCode::MissingSemicolonAfterExpressionStatement,
+            CompilerErrorCode::MissingSemicolonAfterExpressionStatement,
         )?;
         self.emit(OpCode::Pop, token.span);
         Ok(())
     }
     fn expression(&mut self) -> LoxResult<()> {
-        self.parse_precedence(Precedence::Assignment, ParserErrorCode::UnterminatedBlock)?;
+        self.parse_precedence(Precedence::Assignment, CompilerErrorCode::UnterminatedBlock)?;
         Ok(())
     }
     fn emit<T: Into<u8>>(&mut self, byte: T, span: Span) {
@@ -716,7 +767,7 @@ impl<'a> Compiler<'a> {
         self.advance()?;
         Ok(())
     }
-    fn consume(&mut self, ttype: TokenType, code: ParserErrorCode) -> LoxResult<Token> {
+    fn consume(&mut self, ttype: TokenType, code: CompilerErrorCode) -> LoxResult<Token> {
         let token = self.peek()?;
         if token.ttype == ttype {
             self.skip()?;
@@ -729,7 +780,7 @@ impl<'a> Compiler<'a> {
         self.expression()?;
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingClosingParenAfterGroup,
+            CompilerErrorCode::MissingClosingParenAfterGroup,
         )?;
         Ok(())
     }
@@ -757,7 +808,7 @@ impl<'a> Compiler<'a> {
         if self.peek()?.ttype != TokenType::CloseParen {
             loop {
                 if arg_count == 255 {
-                    return Err(self.error(ParserErrorCode::FunctionCallToManyArguments));
+                    return Err(self.error(CompilerErrorCode::FunctionCallToManyArguments));
                 }
                 arg_count += 1;
                 self.expression()?;
@@ -771,14 +822,14 @@ impl<'a> Compiler<'a> {
         }
         self.consume(
             TokenType::CloseParen,
-            ParserErrorCode::MissingClosingParenAfterArgumentList,
+            CompilerErrorCode::MissingClosingParenAfterArgumentList,
         )?;
         Ok(arg_count)
     }
     fn dot(&mut self, can_assign: bool) -> LoxResult<()> {
         let name = self.consume(
             TokenType::Identifier,
-            ParserErrorCode::MissingIdentifierAfterCallDot,
+            CompilerErrorCode::MissingIdentifierAfterCallDot,
         )?;
         let const_addr = self
             .function_compiler
@@ -790,6 +841,11 @@ impl<'a> Compiler<'a> {
             self.skip()?;
             self.expression()?;
             self.emit_bytes(OpCode::PropertySet, const_addr, self.last.span);
+        } else if next.ttype == TokenType::OpenBrace {
+            let arg_count = self.argument_list()?;
+            let span = Span::new_from_range(name.span, self.last.span);
+            self.emit_bytes(OpCode::Invoke, const_addr, span);
+            self.emit(arg_count, span);
         } else {
             self.emit_bytes(OpCode::PropertyGet, const_addr, self.last.span);
         }
@@ -797,15 +853,67 @@ impl<'a> Compiler<'a> {
     }
     fn this(&mut self, _can_assign: bool) -> LoxResult<()> {
         if self.class_compiler.is_none() {
-            return Err(self.error(ParserErrorCode::ThisOutsideMethod));
+            return Err(self.error(CompilerErrorCode::ThisOutsideMethod));
         }
         self.variable(false)
+    }
+    fn super_(&mut self, _can_assign: bool) -> LoxResult<()> {
+        if let Some(class_compiler) = &self.class_compiler {
+            if !class_compiler.has_superclass {
+                return Err(self.error(CompilerErrorCode::SuperOutsideChildClass));
+            }
+        } else {
+            return Err(self.error(CompilerErrorCode::SuperOutsideClass));
+        }
+        let super_token = self.last.clone();
+        self.consume(TokenType::Dot, CompilerErrorCode::MissingDotAfterSuperKeyword)?;
+        let name = self.consume(
+            TokenType::Identifier,
+            CompilerErrorCode::MissingIdentiferAfterSuperDot,
+        )?;
+        let addr = self
+            .function_compiler
+            .borrow_mut()
+            .identifer_constant(&name);
+
+        self.named_variable(
+            &Token::new(TokenType::This, "this".to_string(), Span::default()),
+            false,
+        )?;
+        if self.peek()?.ttype == TokenType::OpenParen {
+            self.skip()?;
+            let arg_count = self.argument_list()?;
+            self.named_variable(
+                &Token::new(TokenType::Super, "super".to_string(), Span::default()),
+                false,
+            )?;
+            self.emit_bytes(
+                OpCode::SuperInvoke,
+                addr,
+                Span::new_from_range(super_token.span, self.last.span),
+            );
+            self.emit(
+                arg_count,
+                Span::new_from_range(super_token.span, self.last.span),
+            );
+        } else {
+            self.named_variable(
+                &Token::new(TokenType::Super, "super".to_string(), Span::default()),
+                false,
+            )?;
+            self.emit_bytes(
+                OpCode::SuperGet,
+                addr,
+                Span::new_from_range(super_token.span, self.last.span),
+            );
+        }
+        Ok(())
     }
     fn unary(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = self.last.clone();
         self.parse_precedence(
             Precedence::Unary,
-            ParserErrorCode::MissingUnaryRightHandSide,
+            CompilerErrorCode::MissingUnaryRightHandSide,
         )?;
         match token.ttype {
             TokenType::Minus => self.emit(OpCode::Negate, token.span),
@@ -819,7 +927,7 @@ impl<'a> Compiler<'a> {
         let token = self.last.clone();
         let rule = self.get_rule(token.ttype.clone());
         if let Some(p) = Precedence::from_index(rule.precedence.get_enum_index() + 1) {
-            self.parse_precedence(p, ParserErrorCode::MissingTermRightHandSide)?;
+            self.parse_precedence(p, CompilerErrorCode::MissingTermRightHandSide)?;
             match token.ttype.clone() {
                 TokenType::Plus => self.emit(OpCode::Add, token.span),
                 TokenType::Minus => self.emit(OpCode::Subtract, token.span),
@@ -844,7 +952,7 @@ impl<'a> Compiler<'a> {
 
         self.patch_jump(else_jump)?;
         self.emit(OpCode::Pop, token.span);
-        self.parse_precedence(Precedence::Or, ParserErrorCode::MissingTermRightHandSide)?;
+        self.parse_precedence(Precedence::Or, CompilerErrorCode::MissingTermRightHandSide)?;
 
         self.patch_jump(end_jump)?;
 
@@ -871,7 +979,7 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
-    fn parse_precedence(&mut self, precedence: Precedence, code: ParserErrorCode) -> LoxResult<()> {
+    fn parse_precedence(&mut self, precedence: Precedence, code: CompilerErrorCode) -> LoxResult<()> {
         let token = self.advance()?;
         let rule = self.get_rule(token.ttype);
         let prefix = rule.prefix.ok_or_else(|| self.error(code))?;
@@ -892,17 +1000,17 @@ impl<'a> Compiler<'a> {
             }
         }
         if can_assign && self.peek()?.ttype == TokenType::Equal {
-            Err(self.error(ParserErrorCode::InvalidAssignmentTarget))
+            Err(self.error(CompilerErrorCode::InvalidAssignmentTarget))
         } else {
             Ok(())
         }
     }
-    fn error(&mut self, code: ParserErrorCode) -> LoxError {
+    fn error(&mut self, code: CompilerErrorCode) -> LoxError {
         let next = self.peek().unwrap(); // Happy to panic if our code errors before reading the first token
         self.report_error(&self.last, &next, code)
     }
-    fn report_error(&self, token: &Token, next_token: &Token, code: ParserErrorCode) -> LoxError {
-        LoxError::Parser(ParserError {
+    fn report_error(&self, token: &Token, next_token: &Token, code: CompilerErrorCode) -> LoxError {
+        LoxError::Compiler(CompilerError {
             token: token.clone(),
             next_token: next_token.clone(),
             code,
@@ -949,7 +1057,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit_return(&mut self, span: Span) {
-        if matches!(self.function_compiler.borrow().function_type, FunctionType::Initializer) {
+        if matches!(
+            self.function_compiler.borrow().function_type,
+            FunctionType::Initializer
+        ) {
             self.emit_bytes(OpCode::LocalGet, 0, span);
         } else {
             self.emit(OpCode::Nil, span);
