@@ -1,5 +1,8 @@
 include "./orth/std.orth"
-include "./orth/std.orth"
 
-"done" puts
-69 exit
+0 while dup argc < do
+    dup 8 * argv + @64 dup strlen
+    swap puts
+    10 putc
+    1 +
+end

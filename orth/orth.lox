@@ -31,10 +31,14 @@ enum OpCode {
     PushInt,
     PushString,
     PushMem,
+    Argv,
+    Argc,
     Add,
     Sub,
     Mul,
+    Divmod,
     Equal,
+    NotEqual,
     Lt,
     Gt,
     Shl,
@@ -47,7 +51,13 @@ enum OpCode {
     Swap,
     Over,
     Store8,
-    Write8,
+    Load8,
+    Store16,
+    Load16,
+    Store32,
+    Load32,
+    Store64,
+    Load64,
     Call,
     Syscall1,
     Syscall2,
@@ -107,7 +117,7 @@ class Stack {
                 let a = this.pop();
                 let b = this.pop();
                 assert a.type == OpCode.PushInt and b.type == OpCode.PushInt, "const expression binary operations only work on integers";
-                this.push(Op(OpCode.PushInt, a.operand - b.operand));
+                this.push(Op(OpCode.PushInt, b.operand - a.operand));
             }
         }
         assert this.head.op.type == OpCode.PushInt, "const expression must evaluate to a integer";
@@ -328,7 +338,11 @@ class Lexer {
             this.number();
         } else {
             let word = this.next_word();
-            if word == "+" {
+            if word == "argv" {
+                this.emit(Op(OpCode.Argv, 0));
+            } else if word == "argc" {
+                this.emit(Op(OpCode.Argc, 0));
+            } else if word == "+" {
                 this.emit(Op(OpCode.Add, 0));
             } else if word == "-" {
                 this.emit(Op(OpCode.Sub, 0));
@@ -336,6 +350,10 @@ class Lexer {
                 this.emit(Op(OpCode.Mul, 0));
             } else if word == "=" {
                 this.emit(Op(OpCode.Equal, 0));
+            } else if word == "divmod" {
+                this.emit(Op(OpCode.Divmod, 0));
+            }  else if word == "!=" {
+                this.emit(Op(OpCode.NotEqual, 0));
             } else if word == "<" {
                 this.emit(Op(OpCode.Lt, 0));
             } else if word == ">" {
@@ -348,10 +366,22 @@ class Lexer {
                 this.emit(Op(OpCode.Bor, 0));
             } else if word == "band" {
                 this.emit(Op(OpCode.Band, 0));
-            } else if word == "@" {
-                this.emit(Op(OpCode.Write8, 0));
-            } else if word == "!" {
+            } else if word == "@8" {
+                this.emit(Op(OpCode.Load8, 0));
+            } else if word == "!8" {
                 this.emit(Op(OpCode.Store8, 0));
+            } else if word == "@16" {
+                this.emit(Op(OpCode.Load16, 0));
+            } else if word == "!16" {
+                this.emit(Op(OpCode.Store8, 0));
+            } else if word == "@32" {
+                this.emit(Op(OpCode.Load32, 0));
+            } else if word == "!32" {
+                this.emit(Op(OpCode.Store32, 0));
+            } else if word == "@64" {
+                this.emit(Op(OpCode.Load64, 0));
+            } else if word == "!64" {
+                this.emit(Op(OpCode.Store64, 0));
             } else if word == "syscall1" {
                 this.emit(Op(OpCode.Syscall1, 0));
             } else if word == "syscall2" {
@@ -490,7 +520,15 @@ class Lexer {
                 or op.type == OpCode.Sub, "Only numbers and additions supported in constant expressions";
             this.stack.push(op);
         } else {
-            if op.type == OpCode.PushInt {
+            if op.type == OpCode.Argv {
+                this.write_line(`    mov rax, [args_ptr]`);
+                this.write_line("    add rax, 8");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Argc {
+                this.write_line(`    mov rax, [args_ptr]`);
+                this.write_line("    mov rax, [rax]");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.PushInt {
                 this.write_line(`    mov rax, {op.operand}`);
                 this.write_line("    push rax");
             } else if op.type == OpCode.PushString {
@@ -508,13 +546,20 @@ class Lexer {
             } else if op.type == OpCode.Sub {
                 this.write_line("    pop rax");
                 this.write_line("    pop rbx");
-                this.write_line("    sub rax, rbx");
-                this.write_line("    push rax");
+                this.write_line("    sub rbx, rax");
+                this.write_line("    push rbx");
             } else if op.type == OpCode.Mul {
                 this.write_line("    pop rax");
                 this.write_line("    pop rbx");
                 this.write_line("    mul rbx");
                 this.write_line("    push rax");
+            } else if op.type == OpCode.Divmod {
+                this.write_line("    xor rdx, rdx");
+                this.write_line("    pop rbx");
+                this.write_line("    pop rax");
+                this.write_line("    div rbx");
+                this.write_line("    push rax");
+                this.write_line("    push rdx");
             } else if op.type == OpCode.Equal {
                 this.write_line("    mov rcx, 0");
                 this.write_line("    mov rdx, 1");
@@ -522,6 +567,14 @@ class Lexer {
                 this.write_line("    pop rbx");
                 this.write_line("    cmp rax, rbx");
                 this.write_line("    cmove rcx, rdx");
+                this.write_line("    push rcx");
+            } else if op.type == OpCode.NotEqual {
+                this.write_line("    mov rcx, 0");
+                this.write_line("    mov rdx, 1");
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    cmp rax, rbx");
+                this.write_line("    cmovne rcx, rdx");
                 this.write_line("    push rcx");
             } else if op.type == OpCode.Lt {
                 this.write_line("    mov rcx, 0");
@@ -590,15 +643,42 @@ class Lexer {
                 this.write_line(`    call proc_start_{op.operand}`);
                 this.write_line(`    mov [ret_stack_rsp], rsp`);
                 this.write_line(`    mov rsp, rax`);
-            } else if op.type == OpCode.Write8 {
+            } else if op.type == OpCode.Load8 {
                 this.write_line("    pop rax");
                 this.write_line("    xor rbx, rbx");
                 this.write_line("    mov bl, [rax]");
                 this.write_line("    push rbx");
             } else if op.type == OpCode.Store8 {
-                this.write_line("    pop rbx");
                 this.write_line("    pop rax");
+                this.write_line("    pop rbx");
                 this.write_line("    mov [rax], bl");
+            } else if op.type == OpCode.Load16 {
+                this.write_line("    pop rax");
+                this.write_line("    xor rbx, rbx");
+                this.write_line("    mov bx, [rax]");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Store16 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    mov [rax], bx");
+            } else if op.type == OpCode.Load32 {
+                this.write_line("    pop rax");
+                this.write_line("    xor rbx, rbx");
+                this.write_line("    mov ebx, [rax]");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Store32 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    mov [rax], ebx");
+            } else if op.type == OpCode.Load64 {
+                this.write_line("    pop rax");
+                this.write_line("    xor rbx, rbx");
+                this.write_line("    mov rbx, [rax]");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Store64 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    mov [rax], rbx");
             } else if op.type == OpCode.Syscall1 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
@@ -666,6 +746,7 @@ class Lexer {
 section .text
     global _start
 _start:
+    mov [args_ptr], rsp
     mov rax, ret_stack_end
     mov [ret_stack_rsp], rax
 {this.output}
@@ -676,6 +757,7 @@ _start:
 section .data
 {this.data}
 section .bss
+args_ptr: resq 1
 ret_stack_rsp: resq 1
 ret_stack: resb 4096
 ret_stack_end:
@@ -694,6 +776,6 @@ compiler.lex();
 
 compiler.write("./orth/output.asm");
 
-let stdout = cmd("bash /mnt/c/Users/Paul/Workspace/Perso/r_lang/orth/run.sh");
+let stdout = cmd("bash /mnt/d/ws/r_scan/orth/run.sh");
 
 print stdout;

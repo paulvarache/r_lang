@@ -1,7 +1,57 @@
+const sizeof(u64) 8 end
+const sizeof(u32) 4 end
+const sizeof(u16) 2 end
+const sizeof(u8)  1 end
+
+const sizeof(ptr)  sizeof(u64) end
+const sizeof(bool) sizeof(u64) end
+const sizeof(int)  sizeof(u64) end
+const sizeof(addr) sizeof(u64) end
+
+// Linux syscall constant
 const FD_stdout 1 end
+const FD_stderr 2 end
 const SYS_write 1 end
 const SYS_exit 60 end
 
-proc puts FD_stdout SYS_write syscall3 end
-proc exit SYS_exit syscall1            end
+proc write SYS_write syscall3 end
+proc fputs write              end
+proc puts  FD_stdout write    end
+proc eputs FD_stderr write    end
 
+proc exit SYS_exit syscall1   end
+
+// Get the length of a C string
+proc strlen
+    0 while over over + @8 0 != do
+        1 +
+    end
+    swap drop
+end
+
+const PUT_BUF_SIZE 20 end
+mem putd_buf PUT_BUF_SIZE end
+
+proc putd
+    // n i
+    PUT_BUF_SIZE 1 - while over 0 != do
+        // i n/10 n%10+48
+        swap 10 divmod 48 +
+        // n/10 i
+        rotate dup putd_buf + rotate swap
+        // putd_buf[i] = n%10+48
+        !8
+        1 -
+    end
+    // length
+    PUT_BUF_SIZE over -
+    // 2 putd_buf + 17
+    swap putd_buf + puts
+end
+
+mem putc_buf 1 end
+
+proc putc
+    putc_buf !8
+    1 putc_buf puts
+end

@@ -1,10 +1,4 @@
-const FD_stdout 1 end
-const SYS_write 1 end
-const SYS_exit 60 end
-
-// macros are deprecated
-macro puts FD_stdout SYS_write syscall3 end
-macro exit SYS_exit syscall1            end
+include "./orth/std.orth"
 
 const N 100 end
 const BOARD_SIZE 100 end
@@ -14,46 +8,47 @@ mem display 1 end
 
 // Initialise the last item in the board to 1
 // last board item relative address
-1 BOARD_SIZE -
-// last item absolute address
-board +
-// write 1
-1 !
+
+// value
+1
+// addr
+1 BOARD_SIZE - board +
+!8
 
 0 while dup N < do
     // print the board
     0 while dup BOARD_SIZE < do
         // idx board[idx]
-        dup board + @ if
+        dup board + @8 if
             42
         else
             32
         end
-        display swap !
+        display !8
         1 display puts
         1 +
     end
     drop
 
-    display 10 !
+    10 display !8
     1 display puts
 
     // update elements
 
     // pattern
-    board @ 1 shl
-    board 1 + @
+    board     @8 1 shl
+    board 1 + @8
     bor
 
     1 while dup 1 BOARD_SIZE - < do
         // idx pattern
         swap 1 shl 7 band
         // idx pattern
-        over board + 1 + @ bor
+        over board + 1 + @8 bor
         // idx pattern idx (110 >> pattern) & 1
         over over 110 swap shr 1 band
         // idx pattern
-        swap board + swap !
+        swap board + !8
         // pattern idx
         swap
 
