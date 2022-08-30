@@ -77,6 +77,19 @@ pub enum CompilerErrorCode {
     MissingUseColon,
     UnterminatedUse,
     NonHeaderUse,
+    MissingSemicolonAfterAssertStatement,
+    MissingAssertionMessage,
+    MissingClosingSqrAfterIndex,
+    MissingEnumIdentifier,
+    MissingEnumOpenBrace,
+    MissingEnumVariant,
+    MissingEnumVariantComma,
+    MissingEnumClosingBrace,
+    NonTopLevelEnum,
+    MissingEnumDot,
+    MissingEnumAccessVariantName,
+    UndefinedEnumVariant,
+    MissingClosingBraceAfterTemplateLiteralValue,
 }
 
 #[derive(Debug)]
@@ -92,6 +105,12 @@ pub enum RuntimeErrorCode {
     NonInstancePropertyAccess,
     ClassInitializerArityMismatch,
     NonClassInherit,
+    NonRoundNumberStringIndex,
+    StringIndexOutOfBounds,
+    NonNumberStringIndexing,
+    InvalidIndexingSubject,
+    InvalidIndexingSetSubject,
+    NonInstanceMethodCall,
 }
 
 #[derive(Debug)]
@@ -112,6 +131,7 @@ pub enum LoxError {
     Scanner(ScannerError),
     Compiler(CompilerError),
     Runtime(RuntimeError),
+    Assert(AssertError),
 }
 
 impl LoxError {
@@ -119,7 +139,8 @@ impl LoxError {
         match self {
             LoxError::Scanner(e) => e.span,
             LoxError::Compiler(e) => e.token.span,
-            LoxError::Runtime(e) => Span::new(0, 0, 0, 0),
+            LoxError::Runtime(e) => Span::default(),
+            LoxError::Assert(_) => Span::default(),
         }
     }
 }
@@ -135,6 +156,19 @@ pub struct CompilerError {
     pub token: Token,
     pub next_token: Token,
     pub code: CompilerErrorCode,
+}
+
+#[derive(Debug)]
+pub struct AssertError {
+    pub addr: usize,
+    pub func_id: usize,
+    pub msg: String,
+}
+
+impl Demistify for AssertError {
+    fn demistify(&self) -> String {
+        self.msg.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -160,13 +194,19 @@ impl Demistify for RuntimeError {
                 "function call mismatch arity".to_string()
             }
             RuntimeErrorCode::UndefinedProperty => "undefined property".to_string(),
-            RuntimeErrorCode::NonInstancePropertyAccess => "only instances have fields".to_string(),
+            RuntimeErrorCode::NonInstancePropertyAccess => "only instances and strings have fields".to_string(),
             RuntimeErrorCode::ClassInitializerArityMismatch => {
                 "class init arity mismatch".to_string()
             }
             RuntimeErrorCode::NonClassInherit => {
                 "cannot inherit from somerthing other than a class".to_string()
             }
+            RuntimeErrorCode::NonRoundNumberStringIndex => "number used to index string is not round".to_string(),
+            RuntimeErrorCode::StringIndexOutOfBounds => "tried to access out of bounds string index".to_string(),
+            RuntimeErrorCode::NonNumberStringIndexing => "can only index strings with numbers".to_string(),
+            RuntimeErrorCode::InvalidIndexingSubject => "only instances and strings can be indexed".to_string(),
+            RuntimeErrorCode::InvalidIndexingSetSubject => "only instance properties can be set using indexing".to_string(),
+            RuntimeErrorCode::NonInstanceMethodCall => "only instances have methods".to_string(),
         }
     }
 }
@@ -348,6 +388,19 @@ impl Demistify for CompilerError {
             CompilerErrorCode::MissingUseColon => format!("expected ':' after first ':'{}", self.demistify_next_token()),
             CompilerErrorCode::UnterminatedUse => format!("expected correctly formatted use{}", self.demistify_next_token()),
             CompilerErrorCode::NonHeaderUse => "use declarations can only appear at the top of a file".to_string(),
+            CompilerErrorCode::MissingSemicolonAfterAssertStatement => format!("expected ';' after assert statement{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingAssertionMessage => format!("expected assertion message after assert statement{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingClosingSqrAfterIndex => format!("expected ']' after indexing{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumIdentifier => format!("expected enum name{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumOpenBrace => format!("expected '{{' after enum name{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumVariant => format!("expected enum variant{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumVariantComma => format!("expected ',' after enum variant{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumClosingBrace => format!("expected '}}' after enum{}", self.demistify_next_token()),
+            CompilerErrorCode::NonTopLevelEnum => "can only declare enum at top level".to_string(),
+            CompilerErrorCode::MissingEnumDot => format!("expected '.' after enum name{}", self.demistify_next_token()),
+            CompilerErrorCode::MissingEnumAccessVariantName => format!("expected variant name after enum ':'{}", self.demistify_next_token()),
+            CompilerErrorCode::UndefinedEnumVariant => format!("enum variant '{}' does not exists", self.token.demistify()),
+            CompilerErrorCode::MissingClosingBraceAfterTemplateLiteralValue => format!("expected '}}' after template literal value{}", self.demistify_next_token()),
         }
     }
 }
@@ -364,6 +417,7 @@ impl fmt::Display for LoxError {
             }
             LoxError::Compiler(err) => writeln!(f, "{}", err.demistify()),
             LoxError::Runtime(err) => writeln!(f, "{}", err.demistify()),
+            LoxError::Assert(err) => writeln!(f, "{}", err.demistify()),
         }
     }
 }

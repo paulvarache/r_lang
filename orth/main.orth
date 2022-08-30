@@ -1,0 +1,22 @@
+const FD_stdout 1 end
+const SYS_write 1 end
+const SYS_exit 60 end
+
+// macros are deprecated
+macro puts FD_stdout SYS_write syscall3 end
+macro exit SYS_exit syscall1            end
+
+const N 3 end
+const special 2 N * end
+
+mem display 3 end
+
+display 1 + 48 special + !
+display 2 + 10 !
+
+0 while 1 + dup 10 < do
+    dup 48 + display swap !
+    3 display puts
+end
+
+"after_loop" puts

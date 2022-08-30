@@ -1,2 +1,5 @@
 /target
 main.lox
+orth/**/*.o
+orth/**/*.asm
+orth/**/output

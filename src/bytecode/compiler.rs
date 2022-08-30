@@ -40,6 +40,7 @@ pub struct Compiler<'a> {
     class_compiler: ClassCompilerLink,
     sourcemaps: HashMap<usize, Sourcemap>,
     use_declarations_finished: bool,
+    enums: HashMap<String, Vec<String>>,
 }
 
 macro_rules! binary_rule {
@@ -82,6 +83,7 @@ impl<'a> Compiler<'a> {
             sourcemaps: HashMap::new(),
             class_compiler: None,
             use_declarations_finished: false,
+            enums: HashMap::new(),
         }
     }
     pub fn compile(&mut self) -> Result<Function, Vec<LoxError>> {
@@ -196,7 +198,7 @@ impl<'a> Compiler<'a> {
             TokenType::Less => comparison_rule!(),
             TokenType::LessEqual => comparison_rule!(),
             TokenType::Identifier => ParseRule {
-                prefix: Some(Compiler::variable),
+                prefix: Some(Compiler::identifier),
                 infix: None,
                 precedence: Precedence::None,
             },
@@ -210,7 +212,11 @@ impl<'a> Compiler<'a> {
                 infix: None,
                 precedence: Precedence::None,
             },
-            TokenType::And => todo!(),
+            TokenType::And => ParseRule {
+                prefix: None,
+                infix: Some(Compiler::and),
+                precedence: Precedence::And,
+            },
             TokenType::Class => todo!(),
             TokenType::Else => todo!(),
             TokenType::False => literal_rule!(),
@@ -246,10 +252,20 @@ impl<'a> Compiler<'a> {
             TokenType::Colon => todo!(),
             TokenType::Use => todo!(),
             TokenType::Undefined => panic!("undefined token for rule"),
+            TokenType::Assert => todo!(),
+            TokenType::OpenSqr => ParseRule {
+                prefix: None,
+                infix: Some(Compiler::index),
+                precedence: Precedence::Call,
+            },
+            TokenType::CloseSqr => ParseRule::default(),
+            TokenType::Enum => ParseRule::default(),
+            TokenType::Backtick => ParseRule { prefix: Some(Compiler::template_literal), infix: None, precedence: Precedence::None },
         }
     }
     // declaration -> class_declaration
     //              | function_declaration
+    //              | enum_declaration
     //              | var_declaration
     //              | use_declaration
     //              | statement;
@@ -267,6 +283,10 @@ impl<'a> Compiler<'a> {
             TokenType::Let => {
                 self.use_declarations_finished = true;
                 self.var_declaration()
+            }
+            TokenType::Enum => {
+                self.use_declarations_finished = true;
+                self.enum_declaration()
             }
             _ => {
                 self.use_declarations_finished = true;
@@ -334,6 +354,30 @@ impl<'a> Compiler<'a> {
             Span::new_from_range(use_token.span, self.last.span),
         );
 
+        Ok(())
+    }
+    fn assert_statement(&mut self) -> LoxResult<()> {
+        let assert_keywork = self.advance()?;
+        let addr;
+        self.expression()?;
+        if self.peek()?.ttype == TokenType::Comma {
+            self.skip()?;
+            self.expression()?;
+        } else {
+            addr = self
+                .function_compiler
+                .borrow_mut()
+                .get_assert_default_msg_addr();
+            self.emit_bytes(OpCode::Constant, addr, assert_keywork.span);
+        }
+        self.consume(
+            TokenType::Semicolon,
+            CompilerErrorCode::MissingSemicolonAfterAssertStatement,
+        )?;
+        self.emit(
+            OpCode::Assert,
+            Span::new_from_range(assert_keywork.span, self.last.span),
+        );
         Ok(())
     }
     fn class_declaration(&mut self) -> LoxResult<()> {
@@ -582,6 +626,41 @@ impl<'a> Compiler<'a> {
             .define_variable(var_addr, span);
         Ok(())
     }
+    fn enum_declaration(&mut self) -> LoxResult<()> {
+        self.skip()?;
+        let mut values = Vec::new();
+        if !matches!(
+            self.function_compiler.borrow().function_type,
+            FunctionType::Script
+        ) {
+            return Err(self.error(CompilerErrorCode::NonTopLevelEnum));
+        }
+
+        let name = self.consume(
+            TokenType::Identifier,
+            CompilerErrorCode::MissingEnumIdentifier,
+        )?;
+        self.consume(
+            TokenType::OpenBrace,
+            CompilerErrorCode::MissingEnumOpenBrace,
+        )?;
+
+        while self.peek()?.ttype != TokenType::CloseBrace {
+            let variant =
+                self.consume(TokenType::Identifier, CompilerErrorCode::MissingEnumVariant)?;
+            values.push(variant.lexeme.clone());
+            self.consume(TokenType::Comma, CompilerErrorCode::MissingEnumVariantComma)?;
+        }
+
+        self.consume(
+            TokenType::CloseBrace,
+            CompilerErrorCode::MissingEnumClosingBrace,
+        )?;
+
+        self.enums.insert(name.lexeme.clone(), values);
+
+        Ok(())
+    }
     fn parse_variable(&mut self, code: CompilerErrorCode) -> LoxResult<(u8, Token)> {
         let name = self.consume(TokenType::Identifier, code)?;
         let res = self.function_compiler.borrow_mut().declare_variable(&name);
@@ -600,6 +679,33 @@ impl<'a> Compiler<'a> {
                 .identifer_constant(&name),
             name.clone(),
         ))
+    }
+    fn identifier(&mut self, can_assign: bool) -> LoxResult<()> {
+        let name = self.last.lexeme.clone();
+        if self.enums.contains_key(&name) {
+            self.enumm(&name)
+        } else {
+            self.named_variable(&self.last.clone(), can_assign)
+        }
+    }
+    fn enumm(&mut self, name: &String) -> LoxResult<()> {
+        let name_span = self.last.span;
+        self.consume(TokenType::Dot, CompilerErrorCode::MissingEnumDot)?;
+        let variant_name = self.consume(
+            TokenType::Identifier,
+            CompilerErrorCode::MissingEnumAccessVariantName,
+        )?;
+        if let Some(enum_values) = self.enums.get(name) {
+            if let Some(val) = enum_values.iter().position(|n| variant_name.lexeme.eq(n)) {
+                self.emit_constant(
+                    Value::Number(val as f64),
+                    Span::new_from_range(name_span, self.last.span),
+                );
+            } else {
+                return Err(self.error(CompilerErrorCode::UndefinedEnumVariant));
+            }
+        }
+        Ok(())
     }
     fn variable(&mut self, can_assign: bool) -> LoxResult<()> {
         self.named_variable(&self.last.clone(), can_assign)
@@ -660,6 +766,7 @@ impl<'a> Compiler<'a> {
             TokenType::Return => self.return_statement(),
             TokenType::While => self.while_statement(),
             TokenType::For => self.for_statement(),
+            TokenType::Assert => self.assert_statement(),
             TokenType::OpenBrace => {
                 self.skip()?;
                 self.begin_scope();
@@ -773,10 +880,6 @@ impl<'a> Compiler<'a> {
     fn for_statement(&mut self) -> LoxResult<()> {
         let for_token = self.advance()?;
         self.begin_scope();
-        self.consume(
-            TokenType::OpenParen,
-            CompilerErrorCode::MissingOpenParenAfterWhileKeyword,
-        )?;
         match self.peek()?.ttype {
             TokenType::Semicolon => {}
             TokenType::Let => self.var_declaration()?,
@@ -798,22 +901,26 @@ impl<'a> Compiler<'a> {
             self.emit(OpCode::Pop, for_token.span);
         }
 
-        if self.peek()?.ttype != TokenType::CloseParen {
+        if self.peek()?.ttype != TokenType::OpenBrace {
             let body_jump = self.emit_jump(OpCode::Jump, for_token.span);
             let increment_start = self.function_compiler.borrow().current_addr();
             self.expression()?;
             self.emit(OpCode::Pop, for_token.span);
             self.consume(
-                TokenType::CloseParen,
+                TokenType::OpenBrace,
                 CompilerErrorCode::MissingClosingParenAfterFor,
             )?;
 
             self.emit_loop(loop_start, for_token.span)?;
             loop_start = increment_start;
             self.patch_jump(body_jump)?;
+        } else {
+            self.skip()?;
         }
 
-        self.statement()?;
+        self.begin_scope();
+        self.block()?;
+        self.end_scope();
         self.emit_loop(loop_start, for_token.span)?;
 
         if let Some(exit_jump) = exit_jump {
@@ -940,7 +1047,8 @@ impl<'a> Compiler<'a> {
             self.skip()?;
             self.expression()?;
             self.emit_bytes(OpCode::PropertySet, const_addr, self.last.span);
-        } else if next.ttype == TokenType::OpenBrace {
+        } else if next.ttype == TokenType::OpenParen {
+            self.skip()?;
             let arg_count = self.argument_list()?;
             let span = Span::new_from_range(name.span, self.last.span);
             self.emit_bytes(OpCode::Invoke, const_addr, span);
@@ -948,6 +1056,30 @@ impl<'a> Compiler<'a> {
         } else {
             self.emit_bytes(OpCode::PropertyGet, const_addr, self.last.span);
         }
+        Ok(())
+    }
+    fn index(&mut self, can_assign: bool) -> LoxResult<()> {
+        let open_square_span = self.last.span;
+        self.expression()?;
+        self.consume(
+            TokenType::CloseSqr,
+            CompilerErrorCode::MissingClosingSqrAfterIndex,
+        )?;
+        let next = self.peek()?;
+        if can_assign && next.ttype == TokenType::Equal {
+            self.skip()?;
+            self.expression()?;
+            self.emit(
+                OpCode::IndexSet,
+                Span::new_from_range(open_square_span, self.last.span),
+            );
+        } else {
+            self.emit(
+                OpCode::IndexGet,
+                Span::new_from_range(open_square_span, self.last.span),
+            );
+        }
+
         Ok(())
     }
     fn this(&mut self, _can_assign: bool) -> LoxResult<()> {
@@ -1011,6 +1143,32 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+    fn template_literal(&mut self, can_assign: bool) -> LoxResult<()> {
+        let mut string_count = 0;
+        loop {
+            let next = self.peek()?;
+            match next.ttype {
+                TokenType::Backtick => {
+                    self.skip()?;
+                    self.emit_bytes(OpCode::StrConcat, string_count as u8, Span::default());
+                    break;
+                }
+                TokenType::OpenBrace => {
+                    string_count += 1;
+                    self.skip()?;
+                    self.expression()?;
+                    self.consume(TokenType::CloseBrace, CompilerErrorCode::MissingClosingBraceAfterTemplateLiteralValue)?;
+                }
+                TokenType::String => {
+                    string_count += 1;
+                    self.skip()?;
+                    self.string(can_assign)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     fn unary(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = self.last.clone();
         self.parse_precedence(
@@ -1047,6 +1205,17 @@ impl<'a> Compiler<'a> {
 
         Ok(())
     }
+    fn and(&mut self, _can_assign: bool) -> LoxResult<()> {
+        let token = self.last.clone();
+        let else_jump = self.emit_jump(OpCode::JumpIfFalse, token.span);
+
+        self.emit(OpCode::Pop, token.span);
+        self.parse_precedence(Precedence::And, CompilerErrorCode::MissingTermRightHandSide)?;
+
+        self.patch_jump(else_jump)?;
+
+        Ok(())
+    }
     fn or(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = self.last.clone();
         let else_jump = self.emit_jump(OpCode::JumpIfFalse, token.span);
@@ -1068,7 +1237,38 @@ impl<'a> Compiler<'a> {
     }
     fn string(&mut self, _can_assign: bool) -> LoxResult<()> {
         let token = &self.last;
-        self.emit_constant(Value::String(token.lexeme.clone()), token.span);
+        let value = token.lexeme.clone();
+        let mut res = vec![];
+        let mut bytes = value.bytes();
+        loop {
+            if let Some(c) = bytes.next() {
+                match c {
+                    b'\\' => match bytes.next() {
+                        Some(b'n') => {
+                            res.push(b'\n');
+                        }
+                        Some(b'r') => {
+                            res.push(b'\r');
+                        }
+                        Some(b'"') => {
+                            res.push(b'"');
+                        }
+                        Some(n) => {
+                            res.push(c);
+                            res.push(n);
+                        }
+                        _ => {}
+                    },
+                    _ => {
+                        res.push(c);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        let value = String::from_utf8(res).unwrap();
+        self.emit_constant(Value::String(value), token.span);
         Ok(())
     }
     fn literal(&mut self, _can_assign: bool) -> LoxResult<()> {

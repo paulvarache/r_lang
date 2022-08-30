@@ -1,0 +1,651 @@
+use std::fs::read_file;
+use std::fs::write_file;
+use std::process::cmd;
+use std::convert::parse_number;
+
+fun is_digit(c) {
+    return str_contains("0123456789", c);
+}
+
+fun str_contains(haystack, needle) {
+    let idx = 0;
+    while idx < haystack.length {
+        if haystack[idx] == needle {
+            return true;
+        } else {
+            idx = idx + 1;
+        }
+    }
+    return false;
+}
+
+fun is_alpha(c) {
+    return str_contains("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", c);
+}
+
+fun is_alphanum(c) {
+    return is_alpha(c) or is_digit(c);
+}
+
+enum OpCode {
+    PushInt,
+    PushString,
+    PushMem,
+    Add,
+    Sub,
+    Mul,
+    Equal,
+    Lt,
+    Gt,
+    Shl,
+    Shr,
+    Bor,
+    Band,
+    Dup,
+    Drop,
+    Rotate,
+    Swap,
+    Over,
+    Store8,
+    Write8,
+    Syscall1,
+    Syscall2,
+    Syscall3,
+    Syscall4,
+    Syscall5,
+    Syscall6,
+}
+
+class Macros { }
+class Consts { }
+class Memory { }
+
+enum BlockType {
+    Root,
+    If,
+    Else,
+    While,
+    WhileDo,
+}
+
+class StackNode {
+    init(op, prev) {
+        this.op = op;
+        this.prev = prev;
+    }
+}
+
+class Stack {
+    init() {
+        this.head = nil;
+    }
+    push(op) {
+        let current = this.head;
+        this.head = StackNode(op, current);
+    }
+    pop() {
+        let last = this.head;
+        this.head = last.prev;
+        return last.op;
+    }
+    resolve() {
+        while this.head.prev != nil {
+            let op = this.pop();
+            if op.type == OpCode.Add {
+                let a = this.pop();
+                let b = this.pop();
+                assert a.type == OpCode.PushInt and b.type == OpCode.PushInt, "const expression binary operations only work on integers";
+                this.push(Op(OpCode.PushInt, a.operand + b.operand));
+            } else if op.type == OpCode.Mul {
+                let a = this.pop();
+                let b = this.pop();
+                assert a.type == OpCode.PushInt and b.type == OpCode.PushInt, "const expression binary operations only work on integers";
+                this.push(Op(OpCode.PushInt, a.operand * b.operand));
+            } else if op.type == OpCode.Sub {
+                let a = this.pop();
+                let b = this.pop();
+                assert a.type == OpCode.PushInt and b.type == OpCode.PushInt, "const expression binary operations only work on integers";
+                this.push(Op(OpCode.PushInt, a.operand - b.operand));
+            }
+        }
+        assert this.head.op.type == OpCode.PushInt, "const expression must evaluate to a integer";
+        return this.head.op.operand;
+    }
+}
+
+class Block {
+    init(id, type) {
+        this.type = type;
+        this.prev = nil;
+        this.id = id;
+    }
+}
+
+class Op {
+    init(type, operand) {
+        this.type = type;
+        this.operand = operand;
+    }
+}
+
+fun is_separator(c) {
+    return c == " "
+        or c == "\n"
+        or c == "\r";
+}
+
+class Lexer {
+    init(source) {
+        this.block_counter = 1;
+        this.source = source;
+        this.line = 0;
+        this.col = 0;
+        this.ptr = 0;
+        this.output = "";
+        this.str_count = 0;
+        this.data = "";
+        this.macros = Macros();
+        this.is_in_macro = false;
+        this.memory = Macros();
+        this.mem_capacity = 0;
+        this.consts = Consts();
+        this.blocks = Block(0, BlockType.Root);
+        this.stack = Stack();
+        this.processing_const = false;
+    }
+    matches(s) {
+        let c = "";
+        for let i = 0; i < s.length; i = i + 1 {
+            c = c + this.source[this.ptr + i];
+        }
+        return s == c;
+    }
+    trim() {
+        while this.ptr < this.source.length and is_separator(this.source[this.ptr]) {
+            if this.source[this.ptr] == "\n" {
+                this.line = this.line + 1;
+            }
+            this.ptr = this.ptr + 1;
+        }
+    }
+    skip_line() {
+        while this.ptr < this.source.length and this.source[this.ptr] != "\n" {
+            this.ptr = this.ptr + 1;
+        }
+        this.trim();
+    }
+    next_word() {
+        let word = this.peek_word();
+        this.move_word(word);
+        return word;
+    }
+    peek_word() {
+        this.trim();
+        let ptr = this.ptr;
+        let word = "";
+        while ptr < this.source.length and!is_separator(this.source[ptr]) {
+            word = word + this.source[ptr];
+            ptr = ptr + 1;
+        }
+        return word;
+    }
+    move_word(word) {
+        this.ptr = this.ptr + word.length;
+    }
+    lex() {
+        while this.ptr < this.source.length {
+            this.declaration();
+        }
+    }
+    declaration() {
+        let word = this.peek_word();
+        if word == "mem" {
+            this.move_word(word);
+            this.memory_declaration();
+        } else if word == "macro" {
+            this.move_word(word);
+            this.macro_declaration();
+        } else if word == "const" {
+            this.move_word(word);
+            this.const_declaration();
+        } else {
+            this.statement();
+        }
+    }
+    statement() {
+        this.expression_statement();
+    }
+    memory_declaration() {
+        let name = this.next_word();
+        this.trim();
+        let size = this.resolve_const_expression();
+        this.memory[name] = this.mem_capacity;
+        this.mem_capacity = this.mem_capacity + size;
+    }
+    resolve_const_expression() {
+        let found = false;
+        let stack = Stack();
+        this.stack = stack;
+        this.processing_const = true;
+
+        while !found {
+            let word = this.peek_word();
+            if word == "end" {
+                this.move_word(word);
+                found = true;
+            } else {
+                this.expression();
+            }
+        }
+
+        this.processing_const = false;
+        let n = stack.resolve();
+
+        return n;
+    }
+    const_declaration() {
+        let name = this.next_word();
+        this.trim();
+
+        let n = this.resolve_const_expression();
+        
+        this.consts[name] = n;
+    }
+    expression_statement() {
+        this.expression();
+    }
+    peek(n) {
+        if this.ptr + n < this.source.length {
+            return this.source[this.ptr + n];
+        }
+        return nil;
+    }
+    expression() {
+        this.trim();
+        let current = this.peek(0);
+        if current == nil {
+            return;
+        }
+        if current == "/" {
+            if this.peek(1) == "/" {
+                this.skip_line();
+            }
+        } else if current == "\"" {
+            this.ptr = this.ptr + 1;
+            this.string();
+        } else if is_digit(current) {
+            this.number();
+        } else {
+            let word = this.next_word();
+            if word == "+" {
+                this.emit(Op(OpCode.Add, 0));
+            } else if word == "-" {
+                this.emit(Op(OpCode.Sub, 0));
+            } else if word == "*" {
+                this.emit(Op(OpCode.Mul, 0));
+            } else if word == "=" {
+                this.emit(Op(OpCode.Equal, 0));
+            } else if word == "<" {
+                this.emit(Op(OpCode.Lt, 0));
+            } else if word == ">" {
+                this.emit(Op(OpCode.Gt, 0));
+            } else if word == "shl" {
+                this.emit(Op(OpCode.Shl, 0));
+            } else if word == "shr" {
+                this.emit(Op(OpCode.Shr, 0));
+            } else if word == "bor" {
+                this.emit(Op(OpCode.Bor, 0));
+            } else if word == "band" {
+                this.emit(Op(OpCode.Band, 0));
+            } else if word == "@" {
+                this.emit(Op(OpCode.Write8, 0));
+            } else if word == "!" {
+                this.emit(Op(OpCode.Store8, 0));
+            } else if word == "syscall1" {
+                this.emit(Op(OpCode.Syscall1, 0));
+            } else if word == "syscall2" {
+                this.emit(Op(OpCode.Syscall2, 0));
+            } else if word == "syscall3" {
+                this.emit(Op(OpCode.Syscall3, 0));
+            } else if word == "syscall4" {
+                this.emit(Op(OpCode.Syscall4, 0));
+            } else if word == "syscall5" {
+                this.emit(Op(OpCode.Syscall5, 0));
+            } else if word == "syscall6" {
+                this.emit(Op(OpCode.Syscall6, 0));
+            } else if word == "dup" {
+                this.emit(Op(OpCode.Dup, 0));
+            } else if word == "swap" {
+                this.emit(Op(OpCode.Swap, 0));
+            } else if word == "over" {
+                this.emit(Op(OpCode.Over, 0));
+            } else if word == "drop" {
+                this.emit(Op(OpCode.Drop, 0));
+            } else if word == "rotate" {
+                this.emit(Op(OpCode.Rotate, 0));
+            } else if word == "if" {
+                this.if_statement();
+            } else if word == "end" {
+                this.end_statement();
+            } else if word == "else" {
+                this.else_statement();
+            } else if word == "while" {
+                this.while_statement();
+            } else if word == "do" {
+                this.do_statement();
+            } else {
+                if this.consts[word] {
+                    this.write_const(word);
+                } else if this.macros[word] {
+                    this.write_macro(word);
+                } else if this.memory[word] {
+                    this.write_memory(word);
+                } else {
+                    assert false, `line {this.line + 1}: unknown keyword '{word}'`;
+                }
+            }
+        }
+    }
+    open_block(type) {
+        let new_block = Block(this.block_counter, type);
+        this.block_counter = this.block_counter + 1;
+        new_block.prev = this.blocks;
+        this.blocks = new_block;
+        return new_block;
+    }
+    close_block() {
+        let current_block = this.blocks;
+        let prev_block = this.blocks.prev;
+        this.blocks = prev_block;
+        return current_block;
+    }
+    while_statement() {
+        let block = this.open_block(BlockType.While);
+        this.write_line(`;; -- while -- `);
+        this.write_line(`while_start_{block.id}:`);
+    }
+    do_statement() {
+        assert this.blocks.type == BlockType.While, "do only available after while";
+        this.write_line(`;; -- do -- `);
+        this.write_line(`    pop rax`);
+        this.write_line(`    cmp rax, 1`);
+        this.write_line(`    jne while_end_{this.blocks.id}`);
+    }
+    if_statement() {
+        let else_block = this.open_block(BlockType.If);
+        this.write_line(`;; -- if -- `);
+        this.write_line(`    pop rax`);
+        this.write_line(`    cmp rax, 1`);
+        this.write_line(`    jne addr_{else_block.id}`);
+    }
+    else_statement() {
+        let else_block = this.close_block();
+        assert else_block.type == BlockType.If, "else only available after if";
+        let end_block = this.open_block(BlockType.Else);
+        this.write_line(`    jmp addr_{end_block.id}`);
+        this.write_line(`;; -- else -- `);
+        this.write_line(`addr_{else_block.id}:`);
+    }
+    end_statement() {
+        let block = this.close_block();
+        if block.type == BlockType.Else {
+            this.write_line(`    jmp addr_{block.id}`);
+            this.write_line(`;; -- end -- `);
+            this.write_line(`addr_{block.id}:`);
+        } else if block.type == BlockType.If {
+            this.write_line(`;; -- end -- `);
+            this.write_line(`addr_end_{block.id}:`);
+        } else if block.type == BlockType.While {
+            this.write_line(`    jmp while_start_{block.id}`);
+            this.write_line(`;; -- end -- `);
+            this.write_line(`while_end_{block.id}:`);
+        }
+    }
+    read_number() {
+        let num = "";
+        while this.ptr < this.source.length and is_digit(this.source[this.ptr]) {
+            num = num + this.source[this.ptr];
+            this.ptr = this.ptr + 1;
+        }
+        return num;
+    }
+    number() {
+        this.emit(Op(OpCode.PushInt, parse_number(this.read_number())));
+    }
+    string() {
+        let str = "";
+        while this.ptr < this.source.length and this.source[this.ptr] != "\"" {
+            str = str + this.source[this.ptr];
+            this.ptr = this.ptr + 1;
+        }
+        this.ptr = this.ptr + 1;
+        this.emit(Op(OpCode.PushString, str));
+    }
+    macro_declaration() {
+        if this.is_in_macro {
+            assert false, "cannot create macro inside macro";
+        }
+        let name = this.next_word();
+        let found = false;
+        let content = "";
+
+        let output = this.output;
+        this.output = "";
+
+        let next;
+
+        while !found {
+            next = this.peek_word();
+            if next == "end" {
+                found = true;
+                this.move_word(next);
+            } else {
+                this.expression();
+            }
+        }
+        content = this.output;
+        this.output = output;
+        this.macros[name] = content;
+    }
+    emit(op) {
+        if this.processing_const {
+            assert op.type == OpCode.PushInt
+                or op.type == OpCode.Add
+                or op.type == OpCode.Mul
+                or op.type == OpCode.Sub, "Only numbers and additions supported in constant expressions";
+            this.stack.push(op);
+        } else {
+            if op.type == OpCode.PushInt {
+                this.write_line(`    mov rax, {op.operand}`);
+                this.write_line("    push rax");
+            } else if op.type == OpCode.PushString {
+                let idx = this.add_string(op.operand);
+                this.write_line(`    mov rax, {op.operand.length}`);
+                this.write_line("    push rax");
+                this.write_line(`    push str_{idx}`);
+            } else if op.type == OpCode.PushMem {
+                this.write_line(`    push mem + {op.operand}`);
+            } else if op.type == OpCode.Add {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    add rax, rbx");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Sub {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    sub rax, rbx");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Mul {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    mul rbx");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Equal {
+                this.write_line("    mov rcx, 0");
+                this.write_line("    mov rdx, 1");
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    cmp rax, rbx");
+                this.write_line("    cmove rcx, rdx");
+                this.write_line("    push rcx");
+            } else if op.type == OpCode.Lt {
+                this.write_line("    mov rcx, 0");
+                this.write_line("    mov rdx, 1");
+                this.write_line("    pop rbx");
+                this.write_line("    pop rax");
+                this.write_line("    cmp rax, rbx");
+                this.write_line("    cmovl rcx, rdx");
+                this.write_line("    push rcx");
+            } else if op.type == OpCode.Gt {
+                this.write_line("    mov rcx, 0");
+                this.write_line("    mov rdx, 1");
+                this.write_line("    pop rbx");
+                this.write_line("    pop rax");
+                this.write_line("    cmp rax, rbx");
+                this.write_line("    cmovg rcx, rdx");
+                this.write_line("    push rcx");
+            } else if op.type == OpCode.Shr {
+                this.write_line("    pop rcx");
+                this.write_line("    pop rbx");
+                this.write_line("    shr rbx, cl");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Shl {
+                this.write_line("    pop rcx");
+                this.write_line("    pop rbx");
+                this.write_line("    shl rbx, cl");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Bor {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    or rbx, rax");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Band {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    and rbx, rax");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Dup {
+                this.write_line("    pop rax");
+                this.write_line("    push rax");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Swap {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    push rax");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Over {
+                this.write_line("    pop rbx");
+                this.write_line("    pop rax");
+                this.write_line("    push rax");
+                this.write_line("    push rbx");
+                this.write_line("    push rax");
+            } else if op.type == OpCode.Drop {
+                this.write_line("    pop rax");
+            } else if op.type == OpCode.Rotate {
+                this.write_line("    pop rax");
+                this.write_line("    pop rbx");
+                this.write_line("    pop rcx");
+                this.write_line("    push rbx");
+                this.write_line("    push rax");
+                this.write_line("    push rcx");
+            } else if op.type == OpCode.Write8 {
+                this.write_line("    pop rax");
+                this.write_line("    xor rbx, rbx");
+                this.write_line("    mov bl, [rax]");
+                this.write_line("    push rbx");
+            } else if op.type == OpCode.Store8 {
+                this.write_line("    pop rbx");
+                this.write_line("    pop rax");
+                this.write_line("    mov [rax], bl");
+            } else if op.type == OpCode.Syscall1 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    syscall");
+            } else if op.type == OpCode.Syscall2 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    pop rsi");
+                this.write_line("    syscall");
+            } else if op.type == OpCode.Syscall3 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    pop rsi");
+                this.write_line("    pop rdx");
+                this.write_line("    syscall");
+            } else if op.type == OpCode.Syscall4 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    pop rsi");
+                this.write_line("    pop rdx");
+                this.write_line("    pop r10");
+                this.write_line("    syscall");
+            } else if op.type == OpCode.Syscall5 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    pop rsi");
+                this.write_line("    pop rdx");
+                this.write_line("    pop r10");
+                this.write_line("    pop r8");
+                this.write_line("    syscall");
+            } else if op.type == OpCode.Syscall6 {
+                this.write_line("    pop rax");
+                this.write_line("    pop rdi");
+                this.write_line("    pop rsi");
+                this.write_line("    pop rdx");
+                this.write_line("    pop r10");
+                this.write_line("    pop r8");
+                this.write_line("    pop r9");
+                this.write_line("    syscall");
+            }
+        }
+    }
+    write_line(content) {
+        this.output = this.output + content + "\n";
+    }
+    write_macro(name) {
+        this.output = this.output + this.macros[name] + "\n";
+    }
+    write_memory(name) {
+        this.emit(Op(OpCode.PushMem, this.memory[name]));
+    }
+    write_const(name) {
+        this.emit(Op(OpCode.PushInt, this.consts[name]));
+    }
+    add_string(s) {
+        let idx = this.str_count;
+        this.data = `{this.data}\n    str_{this.str_count}: db "{s}"`;
+        this.str_count = this.str_count + 1;
+        return idx;
+    }
+    write(dst) {
+
+        let contents = `
+section .text
+    global _start
+_start:
+{this.output}
+    mov rax, 60
+    mov rdi, 0
+    syscall
+
+section .data
+{this.data}
+section .bss
+mem: resb {this.mem_capacity}
+`;
+        write_file(dst, contents);
+    }
+}
+
+
+let source = read_file("./rule110.orth");
+
+let compiler = Lexer(source);
+
+compiler.lex();
+
+compiler.write("./output.asm");
+
+let stdout = cmd("bash /mnt/d/ws/r_scan/run.sh");
+
+print stdout;

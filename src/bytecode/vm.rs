@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::fs;
+use std::process::Command;
 use std::rc::Rc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -13,6 +14,7 @@ use crate::bytecode::debug::disassemble_chunk_instruction;
 use crate::bytecode::opcode::OpCode;
 use crate::bytecode::upvalue::Upvalue;
 use crate::bytecode::value::Value;
+use crate::error::AssertError;
 use crate::error::LoxError;
 use crate::error::LoxResult;
 use crate::error::RuntimeError;
@@ -33,6 +35,17 @@ macro_rules! expr {
     ($e:expr) => {
         $e
     };
+}
+
+macro_rules! cast {
+    ($target: expr, $pat: path) => {{
+        if let $pat(a) = $target {
+            // #1
+            a
+        } else {
+            panic!("mismatch variant when cast to {}", stringify!($pat)); // #2
+        }
+    }};
 }
 
 fn native_std_date_seconds(_args: Vec<Value>) -> Value {
@@ -66,6 +79,53 @@ fn native_std_fs_read_file(args: Vec<Value>) -> Value {
     }
 }
 
+fn native_std_fs_write_file(args: Vec<Value>) -> Value {
+    let mut vals = args.iter();
+    let path = vals.next().expect("expected fs write_file path");
+    let contents = vals.next().expect("expected fs write_file contents");
+    if let Value::String(path) = path {
+        if let Value::String(contents) = contents {
+            fs::write(path, contents).expect("could not write file");
+            Value::Nil
+        } else {
+            panic!();
+        }
+    } else {
+        panic!();
+    }
+}
+
+fn native_std_process_cmd(args: Vec<Value>) -> Value {
+    let mut vals = args.iter();
+    let line = vals.next().expect("expected process cmd line");
+    if let Value::String(line) = line {
+        let vals: Vec<&str> = line.split(' ').collect();
+        let (f, args) = vals.split_at(1);
+        let command = f.join(" ");
+        let r = Command::new(command)
+            .args(args)
+            .output()
+            .expect("failed to execute process");
+        if r.stderr.len() != 0 {
+            eprintln!("{}", String::from_utf8(r.stderr).expect("failed to parse stdout"));
+        }
+        Value::String(String::from_utf8(r.stdout).expect("failed to parse stdout"))
+    } else {
+        panic!();
+    }
+}
+
+fn native_std_convert_parse_number(args: Vec<Value>) -> Value {
+    let mut vals = args.iter();
+    let value = vals.next().expect("expected convert parse_int value");
+    match value {
+        Value::String(string) => {
+            Value::Number(string.parse::<f64>().unwrap())
+        },
+        _ => panic!("can only convert strings to numbers"),
+    }
+}
+
 impl VM {
     pub fn new() -> Self {
         let mut s = Self {
@@ -95,6 +155,9 @@ impl VM {
         s.define_native("std::date::milliseconds", native_std_date_milliseconds);
         s.define_native("std::date::seconds", native_std_date_seconds);
         s.define_native("std::fs::read_file", native_std_fs_read_file);
+        s.define_native("std::fs::write_file", native_std_fs_write_file);
+        s.define_native("std::process::cmd", native_std_process_cmd);
+        s.define_native("std::convert::parse_number", native_std_convert_parse_number);
         native_math!("std::math::sqrt", sqrt);
         native_math!("std::math::sin", sin);
         native_math!("std::math::asin", asin);
@@ -129,7 +192,7 @@ impl VM {
                         (&Value::Number(_), &Value::Number(_))
                     ) {
                         return Err(self.error(
-                            current_frame,
+                            &current_frame,
                             RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType,
                         ));
                     }
@@ -183,7 +246,7 @@ impl VM {
                         self.stack[last_index] = -value;
                     } else {
                         return Err(
-                            self.error(current_frame, RuntimeErrorCode::UnaryMinusInvalidType)
+                            self.error(&current_frame, RuntimeErrorCode::UnaryMinusInvalidType)
                         );
                     }
                 }
@@ -196,7 +259,7 @@ impl VM {
                         (&Value::String(_), &Value::String(_))
                     ) {
                         return Err(self.error(
-                            current_frame,
+                            &current_frame,
                             RuntimeErrorCode::NumberBinaryExprOperandsIncorrectType,
                         ));
                     }
@@ -231,7 +294,7 @@ impl VM {
                     let left = self.pop();
                     self.push(Value::Bool(&left < &right));
                 }
-                OpCode::Print => println!("{}", self.pop()),
+                OpCode::Print => print!("{}", VM::stringify_value(&self.pop())),
                 OpCode::Pop => {
                     self.pop();
                 }
@@ -249,7 +312,7 @@ impl VM {
                             self.push(value.clone());
                         } else {
                             return Err(
-                                self.error(current_frame, RuntimeErrorCode::UndefinedGlobal)
+                                self.error(&current_frame, RuntimeErrorCode::UndefinedGlobal)
                             );
                         }
                     }
@@ -259,7 +322,7 @@ impl VM {
                     if let Value::String(name) = name {
                         if !self.globals.contains_key(name) {
                             return Err(
-                                self.error(current_frame, RuntimeErrorCode::UndefinedGlobal)
+                                self.error(&current_frame, RuntimeErrorCode::UndefinedGlobal)
                             );
                         }
                         let value = self.peek(0);
@@ -388,27 +451,46 @@ impl VM {
                         self.push(value);
                     } else {
                         return Err(
-                            self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess)
+                            self.error(&current_frame, RuntimeErrorCode::NonInstancePropertyAccess)
                         );
                     }
                 }
                 OpCode::PropertyGet => {
                     let name = current_frame.read_constant()?;
                     let instance = self.peek(0).clone();
-                    if let Value::Instance(instance) = instance {
-                        let value = instance.get_field(&name);
-                        if let Some(value) = value {
-                            self.pop();
-                            self.push(value);
-                        } else if !self.bind_method(&instance.class, &name) {
-                            return Err(
-                                self.error(current_frame, RuntimeErrorCode::UndefinedProperty)
-                            );
+                    match instance {
+                        Value::Instance(instance) => {
+                            let value = instance.get_field(&name);
+                            if let Some(value) = value {
+                                self.pop();
+                                self.push(value);
+                            } else if !self.bind_method(&instance.class, &name) {
+                                return Err(
+                                    self.error(&current_frame, RuntimeErrorCode::UndefinedProperty)
+                                );
+                            }
                         }
-                    } else {
-                        return Err(
-                            self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess)
-                        );
+                        Value::String(string) => {
+                            let prop_name = cast!(name, Value::String);
+                            match prop_name.as_str() {
+                                "length" => {
+                                    self.pop();
+                                    self.push(Value::Number(string.len() as f64));
+                                }
+                                _ => {
+                                    return Err(self.error(
+                                        &current_frame,
+                                        RuntimeErrorCode::UndefinedProperty,
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(self.error(
+                                &current_frame,
+                                RuntimeErrorCode::NonInstancePropertyAccess,
+                            ));
+                        }
                     }
                 }
                 OpCode::Method => {
@@ -450,7 +532,7 @@ impl VM {
                             self.pop();
                         } else {
                             return Err(
-                                self.error(current_frame, RuntimeErrorCode::NonClassInherit)
+                                self.error(&current_frame, RuntimeErrorCode::NonClassInherit)
                             );
                         }
                     }
@@ -461,11 +543,90 @@ impl VM {
                     if let Value::Class(superclass) = superclass {
                         if !self.bind_method(&superclass, name) {
                             return Err(
-                                self.error(current_frame, RuntimeErrorCode::UndefinedProperty)
+                                self.error(&current_frame, RuntimeErrorCode::UndefinedProperty)
                             );
                         }
                     }
                 }
+                OpCode::Assert => {
+                    let msg = cast!(self.pop(), Value::String);
+                    let value = self.pop();
+                    if value.is_falsey() {
+                        return Err(LoxError::Assert(AssertError {
+                            msg,
+                            func_id: current_frame.closure.function.id(),
+                            addr: current_frame.ip.saturating_sub(1),
+                        }));
+                    }
+                }
+                OpCode::IndexGet => {
+                    let index = self.pop();
+                    let subject = self.pop();
+                    match subject {
+                        Value::Instance(instance) => {
+                            let value = instance.get_field(&index);
+                            if let Some(value) = value {
+                                self.push(value);
+                            } else if !self.bind_method(&instance.class, &index) {
+                                self.push(Value::Nil);
+                            }
+                        }
+                        Value::String(string) => {
+                            if let Value::Number(index) = index {
+                                if index.fract() != 0.0 {
+                                    return Err(self.error(
+                                        &current_frame,
+                                        RuntimeErrorCode::NonRoundNumberStringIndex,
+                                    ));
+                                }
+                                if index < 0.0 || index as usize >= string.len() {
+                                    return Err(self.error(
+                                        &current_frame,
+                                        RuntimeErrorCode::StringIndexOutOfBounds,
+                                    ));
+                                }
+                                self.push(Value::String(
+                                    string.chars().nth(index as usize).unwrap().to_string(),
+                                ));
+                            } else {
+                                return Err(self.error(
+                                    &current_frame,
+                                    RuntimeErrorCode::NonNumberStringIndexing,
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(self
+                                .error(&current_frame, RuntimeErrorCode::InvalidIndexingSubject));
+                        }
+                    }
+                }
+                OpCode::IndexSet => {
+                    let value = self.pop();
+                    let index = self.pop();
+                    let subject = self.pop();
+                    match subject {
+                        Value::Instance(instance) => {
+                            instance.set_field(&index, &value);
+                            self.push(value);
+                        }
+                        _ => {
+                            return Err(self.error(
+                                &current_frame,
+                                RuntimeErrorCode::InvalidIndexingSetSubject,
+                            ));
+                        }
+                    }
+                }
+                OpCode::StrConcat => {
+                    let str_count = current_frame.read_byte()?;
+                    let mut s = String::new();
+                    for _ in 0..str_count {
+                        let v = self.pop();
+                        s = format!("{}{s}", VM::stringify_value(&v));
+                    }
+                    self.push(Value::String(s));
+                },
             }
             #[cfg(feature = "debug_trace_execution")]
             {
@@ -479,6 +640,12 @@ impl VM {
     }
     fn pop(&mut self) -> Value {
         self.stack.pop().unwrap() // stacked in a way that this is a legitimate panic if it fails
+    }
+    fn stringify_value(value: &Value) -> String {
+        match value {
+            Value::String(string) => format!("{string}"),
+            val => format!("{}", val),
+        }
     }
     fn call_value(
         &mut self,
@@ -506,7 +673,7 @@ impl VM {
                     return self.call(&init_closure, arg_count);
                 } else if arg_count != 0 {
                     return Err(self.error(
-                        current_frame,
+                        &current_frame,
                         RuntimeErrorCode::ClassInitializerArityMismatch,
                     ));
                 }
@@ -517,17 +684,18 @@ impl VM {
                 let start = end - arg_count as usize;
                 let args: Vec<Value> = self.stack.drain(start..end).collect();
                 let value = native(args);
+                self.pop();
                 self.push(value);
                 Ok(current_frame)
             }
-            _ => Err(self.error(current_frame, RuntimeErrorCode::CallNonFunctionValue)),
+            _ => Err(self.error(&current_frame, RuntimeErrorCode::CallNonFunctionValue)),
         }
     }
     pub fn call(&mut self, closure: &Rc<Closure>, arg_count: u8) -> LoxResult<CallFrame> {
         let arity = closure.function.arity();
         let new_frame = CallFrame::new(closure, self.stack.len() - arg_count as usize - 1);
         if arg_count != arity {
-            return Err(self.error(new_frame, RuntimeErrorCode::FunctionCallArityMismatch));
+            return Err(self.error(&new_frame, RuntimeErrorCode::FunctionCallArityMismatch));
         }
         Ok(new_frame)
     }
@@ -552,7 +720,7 @@ impl VM {
         }
         println!("");
     }
-    fn error(&self, current_frame: CallFrame, code: RuntimeErrorCode) -> LoxError {
+    fn error(&self, current_frame: &CallFrame, code: RuntimeErrorCode) -> LoxError {
         LoxError::Runtime(RuntimeError {
             func_id: current_frame.closure.function.id(),
             code,
@@ -612,7 +780,7 @@ impl VM {
         name: &String,
         arg_count: u8,
     ) -> LoxResult<CallFrame> {
-        let value = self.peek(0).clone();
+        let value = self.peek(arg_count as usize).clone();
         if let Value::Instance(instance) = value.clone() {
             if let Some(field) = instance.fields.borrow().get(name) {
                 // Field exists, call that\
@@ -623,7 +791,7 @@ impl VM {
                 self.invoke_from_class(current_frame, &instance.class, name, arg_count)
             }
         } else {
-            Err(self.error(current_frame, RuntimeErrorCode::NonInstancePropertyAccess))
+            Err(self.error(&current_frame, RuntimeErrorCode::NonInstanceMethodCall))
         }
     }
 
@@ -636,9 +804,10 @@ impl VM {
     ) -> LoxResult<CallFrame> {
         let method = class.get_method(name);
         if let Some(method) = method {
+            self.push_frame(current_frame);
             self.call(&method, arg_count)
         } else {
-            Err(self.error(current_frame, RuntimeErrorCode::UndefinedProperty))
+            Err(self.error(&current_frame, RuntimeErrorCode::UndefinedProperty))
         }
     }
 }

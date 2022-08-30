@@ -4,7 +4,7 @@ use std::fmt;
 pub enum TokenType {
     #[default]
     Undefined,
-    OpenParen, CloseParen, OpenBrace, CloseBrace,
+    OpenParen, CloseParen, OpenBrace, CloseBrace, OpenSqr, CloseSqr,
     Comma, Dot, Minus, Plus, Colon, Semicolon, Slash, Star,
 
     Bang, BangEqual,
@@ -12,10 +12,11 @@ pub enum TokenType {
     Greater, GreaterEqual,
     Less, LessEqual,
 
-    Identifier, String, Number,
+    Identifier, String, Number, Backtick,
 
     And, Class, Else, False, Fun, For, If, Nil, Or,
     Print, Return, Super, This, True, Let, While, Use,
+    Assert, Enum,
 
     Eof,
 }

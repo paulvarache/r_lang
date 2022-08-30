@@ -42,4 +42,8 @@ pub enum OpCode {
     Inherit,
     SuperGet,
     SuperInvoke,
+    Assert,
+    IndexGet,
+    IndexSet,
+    StrConcat,
 }

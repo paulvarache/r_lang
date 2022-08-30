@@ -86,7 +86,7 @@ impl PartialEq for &Value {
         match (self, other) {
             (&Value::Number(a), &Value::Number(b)) => a == b,
             (&Value::Bool(a), &Value::Bool(b)) => a == b,
-            (&Value::String(a), &Value::String(b)) => a == b,
+            (&Value::String(a), &Value::String(b)) => (*a).eq(b),
             (&Value::Nil, &Value::Nil) => true,
             _ => false,
         }

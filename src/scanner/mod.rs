@@ -31,6 +31,11 @@ impl Demistify for ScannerError {
     }
 }
 
+enum TemplateLiteralCtx {
+    String,
+    Value,
+}
+
 pub trait Scan {
     fn span(&self) -> Span;
     fn format_error_loc(&self, span: Span) -> String;
@@ -48,6 +53,8 @@ pub struct Scanner<'a> {
     position: (usize, usize),
     reader: BufReader<Box<dyn io::Read + 'a>>,
     source: Vec<String>,
+    template_literal_depth: usize,
+    template_literal_ctx: TemplateLiteralCtx,
 }
 
 fn is_alpha(c: u8) -> bool {
@@ -74,67 +81,15 @@ impl<'a> Scan for Scanner<'a> {
             self.reached_end = true;
             return Ok(Some(self.get_token(TokenType::Eof)));
         }
-        let c = self.advance();
-        match c {
-            None => {
+        loop {
+            if let Some(c) = self.advance() {
+                if let Some(token) = self.parse_token(c)? {
+                    return Ok(Some(token));
+                }
+            } else {
                 self.reached_end = true;
-                Ok(Some(self.get_token(TokenType::Eof)))
+                return Ok(Some(self.get_token(TokenType::Eof)));
             }
-            Some(c) => match c {
-                b'(' => Ok(Some(self.get_token(TokenType::OpenParen))),
-                b')' => Ok(Some(self.get_token(TokenType::CloseParen))),
-                b'{' => Ok(Some(self.get_token(TokenType::OpenBrace))),
-                b'}' => Ok(Some(self.get_token(TokenType::CloseBrace))),
-                b',' => Ok(Some(self.get_token(TokenType::Comma))),
-                b'.' => Ok(Some(self.get_token(TokenType::Dot))),
-                b'-' => Ok(Some(self.get_token(TokenType::Minus))),
-                b'+' => Ok(Some(self.get_token(TokenType::Plus))),
-                b':' => Ok(Some(self.get_token(TokenType::Colon))),
-                b';' => Ok(Some(self.get_token(TokenType::Semicolon))),
-                b'*' => Ok(Some(self.get_token(TokenType::Star))),
-                b'!' => Ok(Some(
-                    self.get_equal_token(TokenType::BangEqual, TokenType::Bang),
-                )),
-                b'=' => Ok(Some(
-                    self.get_equal_token(TokenType::EqualEqual, TokenType::Equal),
-                )),
-                b'<' => Ok(Some(
-                    self.get_equal_token(TokenType::LessEqual, TokenType::Less),
-                )),
-                b'>' => Ok(Some(
-                    self.get_equal_token(TokenType::GreaterEqual, TokenType::Greater),
-                )),
-                b'/' => {
-                    if self.is_match(b'/') {
-                        self.skip_line_comment();
-                        self.next()
-                    } else if self.is_match(b'*') {
-                        self.skip_comment();
-                        self.next()
-                    } else {
-                        Ok(Some(self.get_token(TokenType::Slash)))
-                    }
-                }
-                b'\r' => {
-                    self.col -= 1;
-                    self.skip();
-                    self.next()
-                }
-                b' ' | b'\t' => {
-                    self.skip();
-                    self.next()
-                }
-                b'\n' => {
-                    self.col = 1;
-                    self.line += 1;
-                    self.skip();
-                    self.next()
-                }
-                b'"' => self.get_string(),
-                b'0'..=b'9' => self.get_number(),
-                _ if is_alpha(c) => self.get_identifier(),
-                _ => Err(self.error(ScannerErrorCode::Unknown)),
-            },
         }
     }
 
@@ -194,7 +149,7 @@ impl<'a> Scan for Scanner<'a> {
             let fill = format!(
                 "{nil:0$}{underline}{nil:1$}",
                 start_col - 1,
-                line.len() - (end_col - 1)
+                line.len().saturating_sub(end_col - 1)
             );
 
             let line_prefix = format!("{i:00$} |", max_pad).cyan();
@@ -219,6 +174,109 @@ impl<'a> Scanner<'a> {
             buffer: Vec::new(),
             reader: BufReader::new(r),
             source: vec![],
+            template_literal_depth: 0,
+            template_literal_ctx: TemplateLiteralCtx::String,
+        }
+    }
+    fn begin_template_literal(&mut self) {
+        self.template_literal_depth += 1;
+    }
+    fn end_template_literal(&mut self) {
+        self.template_literal_depth -= 1;
+    }
+    fn is_within_template_literal(&self) -> bool {
+        self.template_literal_depth != 0
+    }
+    fn last_match(&self, expect: u8) -> bool {
+        if let Some(last) = self.last {
+            if last == expect {
+                return true;
+            }
+        }
+        return false;
+    }
+    fn parse_token(&mut self, c: u8) -> Result<Option<Token>, LoxError> {
+        if self.is_within_template_literal()
+            && matches!(self.template_literal_ctx, TemplateLiteralCtx::String)
+        {
+            match c {
+                b'`' if !self.last_match(b'\\') => {
+                    self.end_template_literal();
+                    Ok(Some(self.get_token(TokenType::Backtick)))
+                }
+                b'{' if !self.last_match(b'\\') => {
+                    self.template_literal_ctx = TemplateLiteralCtx::Value;
+                    Ok(Some(self.get_token(TokenType::OpenBrace)))
+                }
+                _ => self.get_template_literal_string(),
+            }
+        } else {
+            match c {
+                b'(' => Ok(Some(self.get_token(TokenType::OpenParen))),
+                b')' => Ok(Some(self.get_token(TokenType::CloseParen))),
+                b'{' => Ok(Some(self.get_token(TokenType::OpenBrace))),
+                b'}' => {
+                    if self.is_within_template_literal() {
+                        self.template_literal_ctx = TemplateLiteralCtx::String;
+                    }
+                    Ok(Some(self.get_token(TokenType::CloseBrace)))
+                }
+                b'[' => Ok(Some(self.get_token(TokenType::OpenSqr))),
+                b']' => Ok(Some(self.get_token(TokenType::CloseSqr))),
+                b',' => Ok(Some(self.get_token(TokenType::Comma))),
+                b'.' => Ok(Some(self.get_token(TokenType::Dot))),
+                b'-' => Ok(Some(self.get_token(TokenType::Minus))),
+                b'+' => Ok(Some(self.get_token(TokenType::Plus))),
+                b':' => Ok(Some(self.get_token(TokenType::Colon))),
+                b';' => Ok(Some(self.get_token(TokenType::Semicolon))),
+                b'*' => Ok(Some(self.get_token(TokenType::Star))),
+                b'!' => Ok(Some(
+                    self.get_equal_token(TokenType::BangEqual, TokenType::Bang),
+                )),
+                b'=' => Ok(Some(
+                    self.get_equal_token(TokenType::EqualEqual, TokenType::Equal),
+                )),
+                b'<' => Ok(Some(
+                    self.get_equal_token(TokenType::LessEqual, TokenType::Less),
+                )),
+                b'>' => Ok(Some(
+                    self.get_equal_token(TokenType::GreaterEqual, TokenType::Greater),
+                )),
+                b'/' => {
+                    if self.is_match(b'/') {
+                        self.skip_line_comment();
+                        Ok(None)
+                    } else if self.is_match(b'*') {
+                        self.skip_comment();
+                        Ok(None)
+                    } else {
+                        Ok(Some(self.get_token(TokenType::Slash)))
+                    }
+                }
+                b'\r' => {
+                    self.col -= 1;
+                    self.skip();
+                    Ok(None)
+                }
+                b' ' | b'\t' => {
+                    self.skip();
+                    Ok(None)
+                }
+                b'\n' => {
+                    self.col = 1;
+                    self.line += 1;
+                    self.skip();
+                    Ok(None)
+                }
+                b'`' => {
+                    self.begin_template_literal();
+                    Ok(Some(self.get_token(TokenType::Backtick)))
+                }
+                b'"' => self.get_string(),
+                b'0'..=b'9' => self.get_number(),
+                _ if is_alpha(c) => self.get_identifier(),
+                _ => Err(self.error(ScannerErrorCode::Unknown)),
+            }
         }
     }
     pub fn error(&mut self, code: ScannerErrorCode) -> LoxError {
@@ -316,13 +374,15 @@ impl<'a> Scanner<'a> {
         Token::new(ttype, lexeme, span)
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
+        let mut last = b' ';
         loop {
             match self.peek() {
-                Some(c) if c != b'"' => {
+                Some(c) if c != b'"' || last == b'\\' => {
                     if c == b'\n' {
                         self.col = 1;
                         self.line += 1;
                     }
+                    last = c;
                     self.advance();
                 }
                 None => {
@@ -341,6 +401,39 @@ impl<'a> Scanner<'a> {
                 }
             }
         }
+    }
+    fn get_template_literal_string(&mut self) -> Result<Option<Token>, LoxError> {
+        loop {
+            match self.peek() {
+                Some(c) => match c {
+                    b'\n' => {
+                        self.col = 1;
+                        self.line += 1;
+                        self.advance();
+                    }
+                    b'`' if !self.last_match(b'\\') => {
+                        break;
+                    }
+                    b'{' if !self.last_match(b'\\') => {
+                        break;
+                    }
+                    _ => {
+                        self.advance();
+                    }
+                },
+                None => {
+                    return Err(self.error(ScannerErrorCode::UnterminatedString));
+                }
+            }
+        }
+        let span = self.span();
+        let s: String =
+            String::from_utf8(self.buffer[0..self.cursor].to_vec()).expect("Failed to parse utf-8");
+        return Ok(Some(self.get_token_literal(
+            TokenType::String,
+            s.clone(),
+            span,
+        )));
     }
     fn get_number(&mut self) -> Result<Option<Token>, LoxError> {
         let mut found_dot = false;
@@ -367,11 +460,7 @@ impl<'a> Scanner<'a> {
         }
         let span = self.span();
         let s = self.consume();
-        Ok(Some(self.get_token_literal(
-            TokenType::Number,
-            s,
-            span,
-        )))
+        Ok(Some(self.get_token_literal(TokenType::Number, s, span)))
     }
     fn get_identifier(&mut self) -> Result<Option<Token>, LoxError> {
         loop {
@@ -434,6 +523,8 @@ impl<'a> Scanner<'a> {
             "true" => Some(TokenType::True),
             "let" => Some(TokenType::Let),
             "while" => Some(TokenType::While),
+            "assert" => Some(TokenType::Assert),
+            "enum" => Some(TokenType::Enum),
             _ => None,
         }
     }

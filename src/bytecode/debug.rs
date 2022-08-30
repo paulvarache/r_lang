@@ -24,7 +24,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
         let instr: OpCode = instruction.into();
         print_opcode(instr.clone());
         let new_offset = match instr {
-            OpCode::Return => offset + 1,
+            OpCode::Return | OpCode::Assert | OpCode::IndexGet| OpCode::IndexSet => offset + 1,
             OpCode::Constant => {
                 print_constant(chunk, offset + 1)?;
                 offset + 2
@@ -48,6 +48,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
             | OpCode::LocalGet
             | OpCode::LocalSet
             | OpCode::UpvalueGet
+            | OpCode::StrConcat
             | OpCode::UpvalueSet => {
                 let n = get_byte(chunk, offset + 1)?;
                 print!("{}", n.to_string().bright_green());
@@ -105,7 +106,7 @@ pub fn disassemble_chunk_instruction(chunk: &Chunk, offset: usize) -> LoxResult<
                     }
                 }
                 i
-            }
+            },
         };
         println!("");
         Ok(new_offset)

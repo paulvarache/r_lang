@@ -111,6 +111,21 @@ impl Lox {
                         println!("{}", compiler.scanner.format_backtrace_line(span));
                     }
                 }
+                LoxError::Assert(err) => {
+                    let span = compiler
+                        .locate_byte(err.func_id, err.addr)
+                        .unwrap_or_else(|| Span::default());
+                    println!("{}", compiler.scanner.format_error_loc(span));
+
+                    for i in (0..self.vm.frames.len().saturating_sub(1)).rev() {
+                        let frame = &self.vm.frames[i];
+                        let span = compiler
+                            .locate_byte(frame.closure.function.id(), frame.ip - 1)
+                            .unwrap_or_else(|| Span::default());
+
+                        println!("{}", compiler.scanner.format_backtrace_line(span));
+                    }
+                },
             }
             println!();
         }

@@ -21,6 +21,7 @@ pub struct FunctionCompiler {
     pub function_type: FunctionType,
     pub enclosing: Option<Box<FunctionCompiler>>,
     pub upvalues: Vec<(bool, u8)>,
+    assert_default_msg_addr: Option<u8>,
 }
 
 impl FunctionCompiler {
@@ -43,7 +44,15 @@ impl FunctionCompiler {
             name: name.to_string(),
             enclosing: None,
             upvalues: Vec::new(),
+            assert_default_msg_addr: None,
         }
+    }
+    pub fn get_assert_default_msg_addr(&mut self) -> u8 {
+        self.assert_default_msg_addr.unwrap_or_else(|| {
+            let addr = self.make_constant(Value::String("failed assertion".to_string()));
+            self.assert_default_msg_addr = Some(addr);
+            addr
+        })
     }
     pub fn identifer_constant(&mut self, name: &Token) -> u8 {
         let value = Value::String(name.lexeme.clone());
