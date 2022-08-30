@@ -1,0 +1,7 @@
+const FD_stdout 1 end
+const SYS_write 1 end
+const SYS_exit 60 end
+
+proc puts FD_stdout SYS_write syscall3 end
+proc exit SYS_exit syscall1            end
+

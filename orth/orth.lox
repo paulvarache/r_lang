@@ -48,6 +48,7 @@ enum OpCode {
     Over,
     Store8,
     Write8,
+    Call,
     Syscall1,
     Syscall2,
     Syscall3,
@@ -56,16 +57,17 @@ enum OpCode {
     Syscall6,
 }
 
-class Macros { }
 class Consts { }
+class Procs { }
 class Memory { }
+class Included { }
 
 enum BlockType {
     Root,
     If,
     Else,
     While,
-    WhileDo,
+    Proc,
 }
 
 class StackNode {
@@ -144,14 +146,15 @@ class Lexer {
         this.output = "";
         this.str_count = 0;
         this.data = "";
-        this.macros = Macros();
-        this.is_in_macro = false;
-        this.memory = Macros();
+        this.memory = Memory();
         this.mem_capacity = 0;
         this.consts = Consts();
         this.blocks = Block(0, BlockType.Root);
         this.stack = Stack();
         this.processing_const = false;
+        this.procs = Procs();
+        this.first_non_include_passed = false;
+        this.included = Included();
     }
     matches(s) {
         let c = "";
@@ -183,7 +186,7 @@ class Lexer {
         this.trim();
         let ptr = this.ptr;
         let word = "";
-        while ptr < this.source.length and!is_separator(this.source[ptr]) {
+        while ptr < this.source.length and !is_separator(this.source[ptr]) {
             word = word + this.source[ptr];
             ptr = ptr + 1;
         }
@@ -200,15 +203,23 @@ class Lexer {
     declaration() {
         let word = this.peek_word();
         if word == "mem" {
+            this.first_non_include_passed = true;
             this.move_word(word);
             this.memory_declaration();
-        } else if word == "macro" {
-            this.move_word(word);
-            this.macro_declaration();
         } else if word == "const" {
+            this.first_non_include_passed = true;
             this.move_word(word);
             this.const_declaration();
+        } else if word == "proc" {
+            this.first_non_include_passed = true;
+            this.move_word(word);
+            this.proc_declaration();
+        } else if word == "include" {
+            assert !this.first_non_include_passed, "include declarations are only allowed at the top";
+            this.move_word(word);
+            this.include_declaration();
         } else {
+            this.first_non_include_passed = true;
             this.statement();
         }
     }
@@ -217,6 +228,7 @@ class Lexer {
     }
     memory_declaration() {
         let name = this.next_word();
+        assert this.memory[name] == nil, "memory redefinition";
         this.trim();
         let size = this.resolve_const_expression();
         this.memory[name] = this.mem_capacity;
@@ -245,11 +257,50 @@ class Lexer {
     }
     const_declaration() {
         let name = this.next_word();
+        assert this.consts[name] == nil, "const redefinition";
         this.trim();
 
         let n = this.resolve_const_expression();
         
         this.consts[name] = n;
+    }
+    proc_declaration() {
+        let name = this.next_word();
+        assert this.procs[name] == nil, "proc redefinition";
+        this.trim();
+        let block = this.open_block(BlockType.Proc);
+        this.write_line(`    jmp proc_end_{block.id}`);
+        this.write_line(`proc_start_{block.id}:`);
+        this.write_line(`    mov [ret_stack_rsp], rsp`);
+        this.write_line(`    mov rsp, rax`);
+        this.procs[name] = block.id;
+    }
+    include_declaration() {
+        this.trim();
+        assert this.matches("\""), "expected path to file to include";
+        this.ptr = this.ptr + 1;
+        let path = this.read_string();
+
+        // Already included
+        if this.included[path] {
+            return;
+        }
+
+        let prev_source = this.source;
+        let prev_ptr = this.ptr;
+
+        this.ptr = 0;
+        this.source = read_file(path);
+
+        this.lex();
+
+        this.source = prev_source;
+        this.ptr = prev_ptr;
+
+        this.included[path] = true;
+        // the included file can modify this
+        // when an inclusion is finished, we know we have not reached another declaration yet
+        this.first_non_include_passed = false;
     }
     expression_statement() {
         this.expression();
@@ -336,10 +387,10 @@ class Lexer {
             } else {
                 if this.consts[word] {
                     this.write_const(word);
-                } else if this.macros[word] {
-                    this.write_macro(word);
                 } else if this.memory[word] {
                     this.write_memory(word);
+                } else if this.procs[word] {
+                    this.call_proc(word);
                 } else {
                     assert false, `line {this.line + 1}: unknown keyword '{word}'`;
                 }
@@ -399,6 +450,12 @@ class Lexer {
             this.write_line(`    jmp while_start_{block.id}`);
             this.write_line(`;; -- end -- `);
             this.write_line(`while_end_{block.id}:`);
+        } else if block.type == BlockType.Proc {
+            this.write_line(`;; -- proc end -- `);
+            this.write_line(`    mov rax, rsp`);
+            this.write_line(`    mov rsp, [ret_stack_rsp]`);
+            this.write_line(`    ret`);
+            this.write_line(`proc_end_{block.id}:`);
         }
     }
     read_number() {
@@ -412,40 +469,18 @@ class Lexer {
     number() {
         this.emit(Op(OpCode.PushInt, parse_number(this.read_number())));
     }
-    string() {
+    read_string() {
         let str = "";
         while this.ptr < this.source.length and this.source[this.ptr] != "\"" {
             str = str + this.source[this.ptr];
             this.ptr = this.ptr + 1;
         }
         this.ptr = this.ptr + 1;
-        this.emit(Op(OpCode.PushString, str));
+        return str;
     }
-    macro_declaration() {
-        if this.is_in_macro {
-            assert false, "cannot create macro inside macro";
-        }
-        let name = this.next_word();
-        let found = false;
-        let content = "";
-
-        let output = this.output;
-        this.output = "";
-
-        let next;
-
-        while !found {
-            next = this.peek_word();
-            if next == "end" {
-                found = true;
-                this.move_word(next);
-            } else {
-                this.expression();
-            }
-        }
-        content = this.output;
-        this.output = output;
-        this.macros[name] = content;
+    string() {
+        let str = this.read_string();
+        this.emit(Op(OpCode.PushString, str));
     }
     emit(op) {
         if this.processing_const {
@@ -548,6 +583,13 @@ class Lexer {
                 this.write_line("    push rbx");
                 this.write_line("    push rax");
                 this.write_line("    push rcx");
+            } else if op.type == OpCode.Call {
+                this.write_line(`    ;; -- call --`);
+                this.write_line(`    mov rax, rsp`);
+                this.write_line(`    mov rsp, [ret_stack_rsp]`);
+                this.write_line(`    call proc_start_{op.operand}`);
+                this.write_line(`    mov [ret_stack_rsp], rsp`);
+                this.write_line(`    mov rsp, rax`);
             } else if op.type == OpCode.Write8 {
                 this.write_line("    pop rax");
                 this.write_line("    xor rbx, rbx");
@@ -602,14 +644,15 @@ class Lexer {
     write_line(content) {
         this.output = this.output + content + "\n";
     }
-    write_macro(name) {
-        this.output = this.output + this.macros[name] + "\n";
-    }
     write_memory(name) {
         this.emit(Op(OpCode.PushMem, this.memory[name]));
     }
     write_const(name) {
         this.emit(Op(OpCode.PushInt, this.consts[name]));
+    }
+    call_proc(name) {
+        let id = this.procs[name];
+        this.emit(Op(OpCode.Call, id));
     }
     add_string(s) {
         let idx = this.str_count;
@@ -623,6 +666,8 @@ class Lexer {
 section .text
     global _start
 _start:
+    mov rax, ret_stack_end
+    mov [ret_stack_rsp], rax
 {this.output}
     mov rax, 60
     mov rdi, 0
@@ -631,6 +676,9 @@ _start:
 section .data
 {this.data}
 section .bss
+ret_stack_rsp: resq 1
+ret_stack: resb 4096
+ret_stack_end:
 mem: resb {this.mem_capacity}
 `;
         write_file(dst, contents);
@@ -638,14 +686,14 @@ mem: resb {this.mem_capacity}
 }
 
 
-let source = read_file("./rule110.orth");
+let source = read_file("./orth/main.orth");
 
 let compiler = Lexer(source);
 
 compiler.lex();
 
-compiler.write("./output.asm");
+compiler.write("./orth/output.asm");
 
-let stdout = cmd("bash /mnt/d/ws/r_scan/run.sh");
+let stdout = cmd("bash /mnt/c/Users/Paul/Workspace/Perso/r_lang/orth/run.sh");
 
 print stdout;

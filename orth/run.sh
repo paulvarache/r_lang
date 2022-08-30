@@ -1,4 +1,4 @@
-nasm -f elf64 output.asm -o output.o
-ld output.o -o output
-./output
+nasm -f elf64 orth/output.asm -o orth/output.o
+ld orth/output.o -o orth/output
+./orth/output
 echo $?

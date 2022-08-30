@@ -12,11 +12,13 @@ const BOARD_SIZE 100 end
 mem board BOARD_SIZE end
 mem display 1 end
 
-// Set all to 0
-0 while dup BOARD_SIZE < do
-    dup board + 1 !
-    1 +
-end
+// Initialise the last item in the board to 1
+// last board item relative address
+1 BOARD_SIZE -
+// last item absolute address
+board +
+// write 1
+1 !
 
 0 while dup N < do
     // print the board
@@ -25,7 +27,7 @@ end
         dup board + @ if
             42
         else
-            95
+            32
         end
         display swap !
         1 display puts

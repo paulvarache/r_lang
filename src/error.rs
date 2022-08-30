@@ -90,6 +90,7 @@ pub enum CompilerErrorCode {
     MissingEnumAccessVariantName,
     UndefinedEnumVariant,
     MissingClosingBraceAfterTemplateLiteralValue,
+    TooManyGlobals,
 }
 
 #[derive(Debug)]
@@ -401,6 +402,7 @@ impl Demistify for CompilerError {
             CompilerErrorCode::MissingEnumAccessVariantName => format!("expected variant name after enum ':'{}", self.demistify_next_token()),
             CompilerErrorCode::UndefinedEnumVariant => format!("enum variant '{}' does not exists", self.token.demistify()),
             CompilerErrorCode::MissingClosingBraceAfterTemplateLiteralValue => format!("expected '}}' after template literal value{}", self.demistify_next_token()),
+            CompilerErrorCode::TooManyGlobals => format!("too many globals {}", self.token.demistify()),
         }
     }
 }

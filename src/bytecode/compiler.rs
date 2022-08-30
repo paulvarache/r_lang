@@ -260,7 +260,11 @@ impl<'a> Compiler<'a> {
             },
             TokenType::CloseSqr => ParseRule::default(),
             TokenType::Enum => ParseRule::default(),
-            TokenType::Backtick => ParseRule { prefix: Some(Compiler::template_literal), infix: None, precedence: Precedence::None },
+            TokenType::Backtick => ParseRule {
+                prefix: Some(Compiler::template_literal),
+                infix: None,
+                precedence: Precedence::None,
+            },
         }
     }
     // declaration -> class_declaration
@@ -348,9 +352,13 @@ impl<'a> Compiler<'a> {
             false,
         )?;
 
+        if const_addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+
         self.emit_bytes(
             OpCode::DefineGlobal,
-            const_addr,
+            const_addr as u8,
             Span::new_from_range(use_token.span, self.last.span),
         );
 
@@ -368,7 +376,7 @@ impl<'a> Compiler<'a> {
                 .function_compiler
                 .borrow_mut()
                 .get_assert_default_msg_addr();
-            self.emit_bytes(OpCode::Constant, addr, assert_keywork.span);
+            self.emit_constant_from_addr(addr, assert_keywork.span);
         }
         self.consume(
             TokenType::Semicolon,
@@ -397,7 +405,11 @@ impl<'a> Compiler<'a> {
 
         let span = Span::new_from_range(class_token.span, name.span);
 
-        self.emit_bytes(OpCode::Class, class_name_addr, span);
+        if class_name_addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+
+        self.emit_bytes(OpCode::Class, class_name_addr as u8, span);
 
         self.function_compiler
             .borrow_mut()
@@ -502,7 +514,12 @@ impl<'a> Compiler<'a> {
             FunctionType::Method
         };
         self.function(func_type, &name)?;
-        self.emit_bytes(OpCode::Method, const_addr, name.span);
+
+        if const_addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+
+        self.emit_bytes(OpCode::Method, const_addr as u8, name.span);
         Ok(())
     }
     fn fun_declaration(&mut self) -> LoxResult<()> {
@@ -594,10 +611,16 @@ impl<'a> Compiler<'a> {
             .make_constant(Value::Func(Rc::new(function)));
         let end = self.last.clone();
         let span = Span::new_from_range(start.span, end.span);
-        self.emit_bytes(OpCode::Closure, const_addr, span);
+        if const_addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+        self.emit_bytes(OpCode::Closure, const_addr as u8, span);
 
         for upvalue in &function_compiler.upvalues {
-            self.emit_bytes(if upvalue.0 { 1 } else { 0 }, upvalue.1, span);
+            if upvalue.1 > u8::MAX.into() {
+                return Err(self.error(CompilerErrorCode::TooManyGlobals));
+            }
+            self.emit_bytes(if upvalue.0 { 1 } else { 0 }, upvalue.1 as u8, span);
         }
 
         Ok(())
@@ -661,7 +684,7 @@ impl<'a> Compiler<'a> {
 
         Ok(())
     }
-    fn parse_variable(&mut self, code: CompilerErrorCode) -> LoxResult<(u8, Token)> {
+    fn parse_variable(&mut self, code: CompilerErrorCode) -> LoxResult<(u32, Token)> {
         let name = self.consume(TokenType::Identifier, code)?;
         let res = self.function_compiler.borrow_mut().declare_variable(&name);
 
@@ -713,7 +736,7 @@ impl<'a> Compiler<'a> {
     fn named_variable(&mut self, name: &Token, can_assign: bool) -> LoxResult<()> {
         let get_op;
         let set_op;
-        let addr: u8;
+        let addr: u32;
         let arg = self.function_compiler.borrow().resolve_local(name);
         if let Err(code) = arg {
             return Err(self.error(code));
@@ -745,9 +768,9 @@ impl<'a> Compiler<'a> {
             self.skip()?;
             self.expression()?;
             self.emit(set_op, token.span);
-            self.emit(addr, name.span);
+            self.emit(addr as u8, name.span);
         } else {
-            self.emit_bytes(get_op, addr, name.span);
+            self.emit_bytes(get_op, addr as u8, name.span);
         }
         Ok(())
     }
@@ -802,7 +825,11 @@ impl<'a> Compiler<'a> {
         let then_jump = self.emit_jump(OpCode::JumpIfFalse, if_token.span);
         self.emit(OpCode::Pop, if_token.span);
 
-        self.branch()?;
+        if self.last.lexeme == "Syscall3" {
+            self.branch()?;
+        } else {
+            self.branch()?;
+        }
         let else_jump = self.emit_jump(OpCode::Jump, if_token.span);
         self.patch_jump(then_jump)?;
         self.emit(OpCode::Pop, if_token.span);
@@ -955,6 +982,11 @@ impl<'a> Compiler<'a> {
             .borrow_mut()
             .emit_constant(value, span);
     }
+    fn emit_constant_from_addr(&mut self, addr: u32, span: Span) {
+        self.function_compiler
+            .borrow_mut()
+            .emit_constant_from_addr(addr, span);
+    }
     fn peek(&mut self) -> LoxResult<Token> {
         if let Some(token) = &self.next {
             Ok(token.clone())
@@ -1042,19 +1074,23 @@ impl<'a> Compiler<'a> {
             .borrow_mut()
             .identifer_constant(&name);
 
+        if const_addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+
         let next = self.peek()?;
         if can_assign && next.ttype == TokenType::Equal {
             self.skip()?;
             self.expression()?;
-            self.emit_bytes(OpCode::PropertySet, const_addr, self.last.span);
+            self.emit_bytes(OpCode::PropertySet, const_addr as u8, self.last.span);
         } else if next.ttype == TokenType::OpenParen {
             self.skip()?;
             let arg_count = self.argument_list()?;
             let span = Span::new_from_range(name.span, self.last.span);
-            self.emit_bytes(OpCode::Invoke, const_addr, span);
+            self.emit_bytes(OpCode::Invoke, const_addr as u8, span);
             self.emit(arg_count, span);
         } else {
-            self.emit_bytes(OpCode::PropertyGet, const_addr, self.last.span);
+            self.emit_bytes(OpCode::PropertyGet, const_addr as u8, self.last.span);
         }
         Ok(())
     }
@@ -1110,6 +1146,10 @@ impl<'a> Compiler<'a> {
             .borrow_mut()
             .identifer_constant(&name);
 
+        if addr > u8::MAX.into() {
+            return Err(self.error(CompilerErrorCode::TooManyGlobals));
+        }
+
         self.named_variable(
             &Token::new(TokenType::This, "this".to_string(), Span::default()),
             false,
@@ -1123,7 +1163,7 @@ impl<'a> Compiler<'a> {
             )?;
             self.emit_bytes(
                 OpCode::SuperInvoke,
-                addr,
+                addr as u8,
                 Span::new_from_range(super_token.span, self.last.span),
             );
             self.emit(
@@ -1137,7 +1177,7 @@ impl<'a> Compiler<'a> {
             )?;
             self.emit_bytes(
                 OpCode::SuperGet,
-                addr,
+                addr as u8,
                 Span::new_from_range(super_token.span, self.last.span),
             );
         }
@@ -1157,7 +1197,10 @@ impl<'a> Compiler<'a> {
                     string_count += 1;
                     self.skip()?;
                     self.expression()?;
-                    self.consume(TokenType::CloseBrace, CompilerErrorCode::MissingClosingBraceAfterTemplateLiteralValue)?;
+                    self.consume(
+                        TokenType::CloseBrace,
+                        CompilerErrorCode::MissingClosingBraceAfterTemplateLiteralValue,
+                    )?;
                 }
                 TokenType::String => {
                     string_count += 1;

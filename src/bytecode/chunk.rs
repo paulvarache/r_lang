@@ -35,15 +35,15 @@ impl Chunk {
     pub fn write_opcode(&mut self, opcode: OpCode) {
         self.write(opcode.into())
     }
-    pub fn add_constant(&mut self, value: Value) -> u8 {
-        let addr = self.constants.len();
-        self.constants.push(value);
-        addr as u8
-    }
-    pub fn add_constant_long(&mut self, value: Value) -> u32 {
-        let addr = self.constants.len();
-        self.constants.push(value);
-        addr as u32
+    pub fn add_constant(&mut self, value: Value) -> u32 {
+        self.constants
+            .iter()
+            .position(|v| &value == v)
+            .unwrap_or_else(|| {
+                let addr = self.constants.len();
+                self.constants.push(value);
+                addr
+            }) as u32
     }
     pub fn get_constant(&self, index: usize) -> Option<&Value> {
         self.constants.get(index)

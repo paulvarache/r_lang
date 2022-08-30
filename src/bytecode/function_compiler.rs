@@ -20,8 +20,8 @@ pub struct FunctionCompiler {
     pub sourcemap: Sourcemap,
     pub function_type: FunctionType,
     pub enclosing: Option<Box<FunctionCompiler>>,
-    pub upvalues: Vec<(bool, u8)>,
-    assert_default_msg_addr: Option<u8>,
+    pub upvalues: Vec<(bool, u32)>,
+    assert_default_msg_addr: Option<u32>,
 }
 
 impl FunctionCompiler {
@@ -47,18 +47,18 @@ impl FunctionCompiler {
             assert_default_msg_addr: None,
         }
     }
-    pub fn get_assert_default_msg_addr(&mut self) -> u8 {
+    pub fn get_assert_default_msg_addr(&mut self) -> u32 {
         self.assert_default_msg_addr.unwrap_or_else(|| {
             let addr = self.make_constant(Value::String("failed assertion".to_string()));
             self.assert_default_msg_addr = Some(addr);
             addr
         })
     }
-    pub fn identifer_constant(&mut self, name: &Token) -> u8 {
+    pub fn identifer_constant(&mut self, name: &Token) -> u32 {
         let value = Value::String(name.lexeme.clone());
         self.make_constant(value)
     }
-    pub fn make_constant(&mut self, value: Value) -> u8 {
+    pub fn make_constant(&mut self, value: Value) -> u32 {
         self.chunk.add_constant(value)
     }
     fn write(&mut self, byte: u8, span: Span) {
@@ -75,8 +75,19 @@ impl FunctionCompiler {
     }
     pub fn emit_constant(&mut self, value: Value, span: Span) {
         let const_addr = self.chunk.add_constant(value);
-        self.write(OpCode::Constant.into(), span);
-        self.write(const_addr, span);
+        self.emit_constant_from_addr(const_addr, span);
+    }
+    pub fn emit_constant_from_addr(&mut self, const_addr: u32, span: Span) {
+        if const_addr > u8::MAX.into() {
+            self.write(OpCode::ConstantLong.into(), span);
+            let [a, b, c, _] = const_addr.to_le_bytes();
+            self.write(c, span);
+            self.write(b, span);
+            self.write(a, span);
+        } else {
+            self.write(OpCode::Constant.into(), span);
+            self.write(const_addr as u8, span);
+        }
     }
     pub fn begin_scope(&mut self) {
         self.scope_depth += 1;
@@ -125,12 +136,15 @@ impl FunctionCompiler {
         }
         self.add_local(name)
     }
-    pub fn define_variable(&mut self, const_addr: u8, span: Span) {
+    pub fn define_variable(&mut self, const_addr: u32, span: Span) {
         if self.is_local_scope() {
             self.mark_initialized();
             return;
         }
-        self.emit_bytes(OpCode::DefineGlobal, const_addr, span);
+        if const_addr > u8::MAX.into() {
+            panic!("too many globals");
+        }
+        self.emit_bytes(OpCode::DefineGlobal, const_addr as u8, span);
     }
     pub fn add_local(&mut self, name: &Token) -> ParseResult<()> {
         if self.locals.len() == u8::MAX.into() {
@@ -140,20 +154,20 @@ impl FunctionCompiler {
         Ok(())
     }
 
-    pub fn resolve_local(&self, name: &Token) -> ParseResult<Option<u8>> {
+    pub fn resolve_local(&self, name: &Token) -> ParseResult<Option<u32>> {
         for i in (0..self.locals.len()).rev() {
             let local = &self.locals[i];
             if local.name == name.lexeme {
                 if local.depth.is_none() {
                     return Err(CompilerErrorCode::ReadOwnLocalBeforeInitialized);
                 }
-                return Ok(Some(i as u8));
+                return Ok(Some(i as u32));
             }
         }
         Ok(None)
     }
 
-    pub fn resolve_upvalue(&mut self, name: &Token) -> ParseResult<Option<u8>> {
+    pub fn resolve_upvalue(&mut self, name: &Token) -> ParseResult<Option<u32>> {
         if let Some(enclosing) = &mut self.enclosing {
             if let Some(local) = enclosing.resolve_local(name)? {
                 enclosing.locals[local as usize].is_captured = true;
@@ -168,10 +182,10 @@ impl FunctionCompiler {
         Ok(None)
     }
 
-    fn add_upvalue(&mut self, addr: u8, is_local: bool) -> ParseResult<Option<u8>> {
+    fn add_upvalue(&mut self, addr: u32, is_local: bool) -> ParseResult<Option<u32>> {
         for (i, upvalue) in self.upvalues.iter().enumerate() {
             if upvalue.1 == addr && upvalue.0 == is_local {
-                return Ok(Some(i as u8));
+                return Ok(Some(i as u32));
             }
         }
         if self.upvalues.len() == 255 {
@@ -180,7 +194,7 @@ impl FunctionCompiler {
         let upvalue = (is_local, addr);
         let upvalue_addr = self.upvalues.len();
         self.upvalues.push(upvalue);
-        Ok(Some(upvalue_addr as u8))
+        Ok(Some(upvalue_addr as u32))
     }
 
     pub fn mark_initialized(&mut self) {
