@@ -8,48 +8,16 @@
 	"foldingStopMarker": "\\bend|else\\s",
 	"patterns": [
 		{
-			"name": "meta.const.orth",
-			"comment": "",
-			"begin": "(const)\\s([^\\s]*)\\s+",
-			"beginCaptures": {
-				"1": {
-					"name": "keyword.const.orth"
-				},
-				"2": {
-					"name": "variable.entity.name.const.orth"
-				}
-			},
-			"end": "\\s(end)",
-			"endCaptures": {
-				"1": {
-					"name": "keyword.end.const.orth"
-				}
-			},
-			"patterns": [
-				{
-					"comment": "limited const math operators",
-					"name": "keyword.operator.math.const.orth",
-					"match": "\\s([+*\\-])\\s"
-				},
-				{
-					"include": "#comments"
-				},
-				{
-					"include": "#numbers"
-				},
-				{
-					"include": "#variables"
-				}
-			]
-		},
-		{
 			"include": "#comments"
 		},
 		{
-			"include": "#procs"
+			"include": "#const-declaration"
 		},
 		{
-			"include": "#keywords"
+			"include": "#proc-declaration"
+		},
+		{
+			"include": "#mem-declaration"
 		},
 		{
 			"include": "#strings"
@@ -58,48 +26,78 @@
 			"include": "#numbers"
 		},
 		{
-			"include": "#variables"
+			"include": "#keywords"
 		},
 		{
-			"include": "#constants"
+			"include": "#variables"
 		}
 	],
 	"repository": {
-		"constants": {
-			"patterns": [
-				{
-					"comment": "booleans",
-					"name": "constant.language.bool.orth",
-					"match": "\\b(true|false)\\b"
+		"const-declaration": {
+			"name": "meta.const.orth",
+			"comment": "",
+			"match": "\\b(const)\\s+([a-zA-Z0-9\\(\\)@!]+)",
+			"captures": {
+				"1": {
+					"name": "keyword.const.orth"
+				},
+				"2": {
+					"name": "variable.entity.name.const.orth"
 				}
-			]
+			}
+		},
+		"proc-declaration": {
+			"name": "meta.const.orth",
+			"comment": "",
+			"match": "\\b(proc)\\s+([a-zA-Z0-9\\(\\)@!]+)",
+			"captures": {
+				"1": {
+					"name": "keyword.proc.orth"
+				},
+				"2": {
+					"name": "entity.name.function.orth"
+				}
+			}
+		},
+		"mem-declaration": {
+			"name": "meta.const.orth",
+			"comment": "",
+			"match": "\\b(mem)\\s+([a-zA-Z0-9\\(\\)@!]+)",
+			"captures": {
+				"1": {
+					"name": "keyword.mem.orth"
+				},
+				"2": {
+					"name": "variable.entity.name.mem.orth"
+				}
+			}
 		},
 		"keywords": {
 			"patterns": [
 				{
+					"comment": "math operators",
+					"name": "keyword.operator.math.orth",
+					"match": "(\\+|\\*|\\-|divmod)\\b"
+				},
+				{
 					"comment": "control flow keywords",
 					"name": "keyword.control.orth",
-					"match": "\\b(else|if|return|while)\\b"
+					"match": "\\b(else|if|return|while|end|do)"
 				},
 				{
 					"comment": "comparison operators",
 					"name": "keyword.operator.comparison.orth",
-					"match": "\\b(=(=)?(?!>)|!=|<=|(?<!=)>=)\\b"
-				},
-				{
-					"comment": "math operators",
-					"name": "keyword.operator.math.orth",
-					"match": "\\b([+*\\-\\divmod])\\b"
+					"match": "(=(=)?(?!>)|!=|<=|(?<!=)>=)\\b"
 				},
 				{
 					"comment": "store",
 					"name": "keyword.operator.store.orth",
-					"match": "\\b(![8|16|32|64])\\b"
+					"match": "(!(8|16|32|64))\\b"
 				},
 				{
 					"comment": "load",
 					"name": "keyword.operator.store.orth",
-					"match": "\\b(@[8|16|32|64])\\b"
+					"match": "(@(8|16|32|64))\\b"
 				},
 				{
 					"comment": "operators",
@@ -113,7 +111,7 @@
 				{
 					"comment": "variables",
 					"name": "variable.other.orth",
-					"match": "([^\\s]*)"
+					"match": "([a-zA-Z0-9\\(\\)@!]+)"
 				}
 			]
 		},
@@ -136,50 +134,7 @@
 			"patterns": [
 				{
 					"name": "constant.numeric.decimal.orth",
-					"match": "([0-9]+)"
-				}
-			]
-		},
-		"procs": {
-			"patterns": [
-				{
-					"name": "meta.function.definition.orth",
-					"comment": "",
-					"begin": "(proc)\\s([^\\s]*)\\s+",
-					"beginCaptures": {
-						"1": {
-							"name": "keyword.other.function.orth"
-						},
-						"2": {
-							"name": "entity.name.function.orth"
-						}
-					},
-					"end": "\\s(end)",
-					"endCaptures": {
-						"0": {
-							"name": "keyword.control.function.orth"
-						}
-					},
-					"patterns": [
-						{
-							"include": "#comments"
-						},
-						{
-							"include": "#keywords"
-						},
-						{
-							"include": "#strings"
-						},
-						{
-							"include": "#numbers"
-						},
-						{
-							"include": "#variables"
-						},
-						{
-							"include": "#constants"
-						}
-					]
+					"match": "\\b([0-9]+)\\b"
 				}
 			]
 		},

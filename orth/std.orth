@@ -19,7 +19,6 @@ proc fputs write              end
 proc puts  FD_stdout write    end
 proc eputs FD_stderr write    end
 
-
 // Get the length of a C string
 proc strlen
     0 while over over + @8 0 != do
