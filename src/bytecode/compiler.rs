@@ -187,7 +187,7 @@ impl<'a> Compiler<'a> {
                 infix: Some(Compiler::binary),
                 precedence: Precedence::Equality,
             },
-            TokenType::Equal => todo!(),
+            TokenType::Equal => ParseRule::default(),
             TokenType::EqualEqual => ParseRule {
                 prefix: None,
                 infix: Some(Compiler::binary),
@@ -1292,6 +1292,9 @@ impl<'a> Compiler<'a> {
                         }
                         Some(b'r') => {
                             res.push(b'\r');
+                        }
+                        Some(b'\\') => {
+                            res.push(b'\\');
                         }
                         Some(b'"') => {
                             res.push(b'"');

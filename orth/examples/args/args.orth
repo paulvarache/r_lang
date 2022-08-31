@@ -1,5 +1,6 @@
 include "./orth/std.orth"
 
+// print all the args passed to the program
 0 while dup argc < do
     dup 8 * argv + @64 dup strlen
     swap puts

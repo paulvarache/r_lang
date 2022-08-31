@@ -374,15 +374,19 @@ impl<'a> Scanner<'a> {
         Token::new(ttype, lexeme, span)
     }
     fn get_string(&mut self) -> Result<Option<Token>, LoxError> {
-        let mut last = b' ';
+        let mut is_escaping = false;
         loop {
             match self.peek() {
-                Some(c) if c != b'"' || last == b'\\' => {
+                Some(c) if c != b'"' || is_escaping => {
                     if c == b'\n' {
                         self.col = 1;
                         self.line += 1;
                     }
-                    last = c;
+                    if !is_escaping {
+                        is_escaping = c == b'\\';
+                    } else {
+                        is_escaping = false;
+                    }
                     self.advance();
                 }
                 None => {

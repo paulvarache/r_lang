@@ -138,8 +138,8 @@ pub fn main() {
     let mut lox = Lox::new();
     let args: Vec<String> = env::args().collect();
     match args.len() {
+        0 => lox.print_usage(),
         1 => lox.run_promt(),
-        2 => lox.run_file(&args[1]).expect("Could not read file"),
-        _ => lox.print_usage(),
+        _ => lox.run_file(&args[1]).expect("Could not read file"),
     }
 }

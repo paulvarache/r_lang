@@ -1,0 +1,342 @@
+{
+	"name": "lox",
+	"scopeName": "source.lox",
+	"fileTypes": [
+		".lox"
+	],
+	"foldingStartMarker": "\\{\\s*$",
+	"foldingStopMarker": "^\\s*\\}",
+	"patterns": [
+		{
+			"name": "meta.use.lox",
+			"comment": "",
+			"begin": "\\b(use)\\s",
+			"beginCaptures": {
+				"1": {
+					"name": "keyword.other.lox"
+				}
+			},
+			"end": ";",
+			"patterns": [
+				{
+					"include": "#namespaces"
+				}
+			]
+		},
+		{
+			"name": "meta.class.lox",
+			"comment": "",
+			"match": "(class)\\s+([a-zA-Z_0-9?]*)",
+			"captures": {
+				"1": {
+					"name": "storage.type.class.lox"
+				},
+				"2": {
+					"name": "entity.name.type.class.lox"
+				}
+			}
+		},
+		{
+			"name": "meta.class.lox",
+			"comment": "",
+			"begin": "\\{",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.lox"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.block.lox"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#method-declaration"
+				}
+			]
+		},
+		{
+			"include": "#block-comments"
+		},
+		{
+			"include": "#comments"
+		},
+		{
+			"include": "#functions"
+		},
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#punctuation"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#variables"
+		}
+	],
+	"repository": {
+		"namespaces": {
+			"patterns": [
+				{
+					"match": "([a-zA-Z_0-9]*)(::)",
+					"captures": {
+						"1": {
+							"name": "entity.name.namespace.lox"
+						},
+						"2": {
+							"name": "keyword.operator.namespace.lox"
+						}
+					}
+				}
+			]
+		},
+		"method-declaration": {
+			"patterns": [
+				{
+					"name": "meta.method.declaration.lox",
+					"begin": "([a-zA-Z_0-9?]*)",
+					"beginCaptures": {
+						"1": {
+							"name": "meta.definition.method.lox entity.name.function.lox"
+						}
+					},
+					"end": "(?=\\}|;|,|$)|(?<=\\})",
+					"patterns": [
+						{
+							"include": "#function-body"
+						}
+					]
+				}
+			]
+		},
+		"function-body": {
+			"patterns": []
+		},
+		"constants": {
+			"patterns": [
+				{
+					"comment": "booleans",
+					"name": "constant.language.bool.lox",
+					"match": "\\b(true|false)\\b"
+				}
+			]
+		},
+		"keywords": {
+			"patterns": [
+				{
+					"comment": "control flow keywords",
+					"name": "keyword.control.lox",
+					"match": "\\b(else|for|if|return|while)\\b"
+				},
+				{
+					"comment": "storage keywords",
+					"name": "keyword.other.lox storage.type.lox",
+					"match": "\\b(let)\\b"
+				},
+				{
+					"comment": "enum keyword",
+					"name": "keyword.declaration.enum.lox storage.type.lox",
+					"match": "\\b(enum)\\b"
+				},
+				{
+					"comment": "single equal",
+					"name": "keyword.operator.assignment.equal.lox",
+					"match": "(?<![<>])=(?!=|>)"
+				},
+				{
+					"comment": "comparison operators",
+					"name": "keyword.operator.comparison.lox",
+					"match": "(=(=)?(?!>)|!=|<=|(?<!=)>=)"
+				},
+				{
+					"comment": "math operators",
+					"name": "keyword.operator.math.lox",
+					"match": "([+*\\-\\/])"
+				},
+				{
+					"comment": "dot access",
+					"name": "keyword.operator.access.dot.lox",
+					"match": "\\.(?!\\.)"
+				}
+			]
+		},
+		"variables": {
+			"patterns": [
+				{
+					"comment": "variables",
+					"name": "variable.other.lox",
+					"match": "\\b([a-zA-Z_0-9?]*)\\b"
+				}
+			]
+		},
+		"strings": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.lox",
+					"begin": "\"",
+					"end": "\"",
+					"patterns": [
+						{
+							"name": "constant.character.escape.lox",
+							"match": "\\\\[\"\\\\]"
+						}
+					]
+				}
+			]
+		},
+		"functions": {
+			"patterns": [
+				{
+					"name": "meta.function.definition.lox",
+					"comment": "",
+					"begin": "\\b(fun)\\s([a-zA-Z_0-9?]*)(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "keyword.other.fun.lox"
+						},
+						"2": {
+							"name": "entity.name.function.lox"
+						},
+						"3": {
+							"name": "punctuation.brackets.round.lox"
+						}
+					},
+					"end": "\\{|;",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.brackets.curly.lox"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#block-comments"
+						},
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#keywords"
+						},
+						{
+							"include": "#functions"
+						},
+						{
+							"include": "#punctuation"
+						},
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#variables"
+						}
+					]
+				},
+				{
+					"comment": "function/method calls, chaining",
+					"name": "meta.function.call.lox",
+					"begin": "([a-zA-Z_0-9?]*)(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "entity.name.function.lox"
+						},
+						"2": {
+							"name": "punctuation.brackets.round.lox"
+						}
+					},
+					"end": "\\)",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.brackets.round.lox"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#block-comments"
+						},
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#keywords"
+						},
+						{
+							"include": "#functions"
+						},
+						{
+							"include": "#punctuation"
+						},
+						{
+							"include": "#strings"
+						},
+						{
+							"include": "#variables"
+						}
+					]
+				}
+			]
+		},
+		"comments": {
+			"patterns": [
+				{
+					"comment": "line comments",
+					"name": "comment.line.double-slash.lox",
+					"match": "\\s*//.*"
+				}
+			]
+		},
+		"block-comments": {
+			"patterns": [
+				{
+					"comment": "empty block comments",
+					"name": "comment.block.lox",
+					"match": "/\\*\\*/"
+				},
+				{
+					"comment": "block comments",
+					"name": "comment.block.lox",
+					"begin": "/\\*(?!\\*)",
+					"end": "\\*/",
+					"patterns": [
+						{
+							"include": "#block-comments"
+						}
+					]
+				}
+			]
+		},
+		"punctuation": {
+			"patterns": [
+				{
+					"comment": "comma",
+					"name": "punctuation.comma.lox",
+					"match": ","
+				},
+				{
+					"comment": "curly braces",
+					"name": "punctuation.brackets.curly.lox",
+					"match": "[{}]"
+				},
+				{
+					"comment": "parentheses, round brackets",
+					"name": "punctuation.brackets.round.lox",
+					"match": "[()]"
+				},
+				{
+					"comment": "semicolon",
+					"name": "punctuation.semi.lox",
+					"match": ";"
+				},
+				{
+					"comment": "square brackets",
+					"name": "punctuation.brackets.square.lox",
+					"match": "[\\[\\]]"
+				}
+			]
+		}
+	}
+}

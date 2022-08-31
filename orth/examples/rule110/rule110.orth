@@ -12,7 +12,7 @@ mem display 1 end
 // value
 1
 // addr
-1 BOARD_SIZE - board +
+BOARD_SIZE 1 - board +
 !8
 
 0 while dup N < do
@@ -40,7 +40,7 @@ mem display 1 end
     board 1 + @8
     bor
 
-    1 while dup 1 BOARD_SIZE - < do
+    1 while dup BOARD_SIZE 1 - < do
         // idx pattern
         swap 1 shl 7 band
         // idx pattern

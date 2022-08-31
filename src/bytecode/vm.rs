@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::env;
+use std::env::args;
 use std::f64::consts::PI;
 use std::fs;
 use std::process::Command;
@@ -107,7 +109,10 @@ fn native_std_process_cmd(args: Vec<Value>) -> Value {
             .output()
             .expect("failed to execute process");
         if r.stderr.len() != 0 {
-            eprintln!("{}", String::from_utf8(r.stderr).expect("failed to parse stdout"));
+            eprintln!(
+                "{}",
+                String::from_utf8(r.stderr).expect("failed to parse stdout")
+            );
         }
         Value::String(String::from_utf8(r.stdout).expect("failed to parse stdout"))
     } else {
@@ -119,11 +124,39 @@ fn native_std_convert_parse_number(args: Vec<Value>) -> Value {
     let mut vals = args.iter();
     let value = vals.next().expect("expected convert parse_int value");
     match value {
-        Value::String(string) => {
-            Value::Number(string.parse::<f64>().unwrap())
-        },
+        Value::String(string) => Value::Number(string.parse::<f64>().unwrap()),
         _ => panic!("can only convert strings to numbers"),
     }
+}
+
+fn native_std_env_get_arg(args: Vec<Value>) -> Value {
+    let mut vals = args.iter();
+    let value = vals.next().expect("expected env get_arg index");
+    match value {
+        Value::Number(index) => {
+            let arg = env::args().nth(*index as usize);
+            if let Some(arg) = arg {
+                return Value::String(arg);
+            } else {
+                return Value::Nil;
+            }
+        }
+        _ => panic!("index must be a number"),
+    }
+}
+
+fn native_std_env_cwd(_args: Vec<Value>) -> Value {
+    Value::String(
+        env::current_dir()
+            .expect("cannot get cwd")
+            .into_os_string()
+            .into_string()
+            .expect("couldnt get cwd"),
+    )
+}
+
+fn native_std_env_os(_args: Vec<Value>) -> Value {
+    Value::String(env::consts::OS.to_string())
 }
 
 impl VM {
@@ -157,7 +190,13 @@ impl VM {
         s.define_native("std::fs::read_file", native_std_fs_read_file);
         s.define_native("std::fs::write_file", native_std_fs_write_file);
         s.define_native("std::process::cmd", native_std_process_cmd);
-        s.define_native("std::convert::parse_number", native_std_convert_parse_number);
+        s.define_native(
+            "std::convert::parse_number",
+            native_std_convert_parse_number,
+        );
+        s.define_native("std::env::get_arg", native_std_env_get_arg);
+        s.define_native("std::env::cwd", native_std_env_cwd);
+        s.define_native("std::env::os", native_std_env_os);
         native_math!("std::math::sqrt", sqrt);
         native_math!("std::math::sin", sin);
         native_math!("std::math::asin", asin);
@@ -626,7 +665,7 @@ impl VM {
                         s = format!("{}{s}", VM::stringify_value(&v));
                     }
                     self.push(Value::String(s));
-                },
+                }
             }
             #[cfg(feature = "debug_trace_execution")]
             {

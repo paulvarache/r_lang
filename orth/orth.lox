@@ -1,7 +1,13 @@
 use std::fs::read_file;
 use std::fs::write_file;
+
 use std::process::cmd;
+
 use std::convert::parse_number;
+
+use std::env::get_arg;
+use std::env::cwd;
+use std::env::os;
 
 fun is_digit(c) {
     return str_contains("0123456789", c);
@@ -767,15 +773,177 @@ mem: resb {this.mem_capacity}
     }
 }
 
+let separator = "/";
+if os() == "windows" {
+    separator = "\\";
+}
 
-let source = read_file("./orth/main.orth");
+fun substr(s, start, end) {
+    let res = "";
+    while start < end {
+        res = res + s[start];
+        start = start + 1;
+    }
+    return res;
+}
+
+fun join(p1, p2) {
+    let res = "";
+    let ptr = p1.length - 1;
+    while ptr >= 0 and p1[ptr] == separator {
+        ptr = ptr - 1;
+    }
+    res = substr(p1, 0, ptr + 1);
+
+    ptr = 0;
+
+    if p2[0] == "." {
+        ptr = ptr + 1;
+        if p2[1] == separator {
+            ptr = ptr + 1;
+        }
+    }
+
+    res = res + separator + substr(p2, ptr, p2.length);
+
+    return res;
+}
+
+fun resolve(p) {
+    if os() == "windows" {
+        if p[1] == ":" and p[2] == "\\" {
+            return p;
+        }
+    } else {
+        if p[0] == "/" {
+            return p;
+        }
+    }
+    return join(cwd(), p);
+}
+
+fun dirname(p) {
+    let res = "";
+    let ptr = p.length - 1;
+    let found = false;
+    while ptr >= 0 and !found {
+        found = p[ptr] == separator;
+        ptr = ptr - 1;
+    }
+    res = substr(p, 0, ptr + 1);
+    return res;
+}
+
+fun filename(p) {
+    let res = "";
+    let ptr = p.length - 1;
+    let found = false;
+    while ptr >= 0 and !found {
+        found = p[ptr] == separator;
+        ptr = ptr - 1;
+    }
+    res = substr(p, ptr + 2, p.length);
+    ptr = res.length - 1;
+    found = false;
+    while ptr >= 0 and !found {
+        found = res[ptr] == ".";
+        ptr = ptr - 1;
+    }
+    res = substr(res, 0, ptr + 1);
+    return res;
+}
+
+fun replace(c, seek, new_value) {
+    let res = "";
+    let i = 0;
+    while i < c.length {
+        if c[i] == seek {
+            res = res + new_value;
+        } else {
+            res = res + c[i];
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
+fun to_bash_path(path) {
+    let drive = path[0];
+    drive = "c"; // TODO use lowercase
+    let rest = substr(path, 3, path.length);
+    return `/mnt/{drive}/{replace(rest, "\\", "/")}`;
+}
+
+let i = 2;
+let arg = get_arg(i);
+let grab_extra_args = false;
+
+let src_path = nil;
+let run = false;
+let use_bash = false;
+
+let extra_args = "";
+
+while arg != nil {
+    if grab_extra_args {
+        extra_args = `{extra_args} {arg}`;
+    } else {
+        if i == 2 {
+            src_path = arg;
+        }
+        if arg == "-b" {
+            use_bash = true;
+        } else if arg == "-r" {
+            run = true;
+        } else if arg == "--" {
+            grab_extra_args = true;
+        }
+    }
+    i = i + 1;
+    arg = get_arg(i);
+}
+
+assert src_path != nil, "must provide a .orth file to compile";
+
+src_path = resolve(src_path);
+let root = dirname(src_path);
+let name = filename(src_path);
+let asm_output = join(root, `{name}.asm`);
+let obj_output = join(root, `{name}.o`);
+let exec_output = join(root, name);
+
+let source = read_file(src_path);
 
 let compiler = Lexer(source);
 
 compiler.lex();
 
-compiler.write("./orth/output.asm");
+compiler.write(asm_output);
 
-let stdout = cmd("bash /mnt/d/ws/r_scan/orth/run.sh");
+if os() == "windows" and use_bash {
+    asm_output = to_bash_path(asm_output);
+    obj_output = to_bash_path(obj_output);
+    exec_output = to_bash_path(exec_output);
+}
 
-print stdout;
+let nasm_command = `nasm -f elf64 {asm_output} -o {obj_output}`;
+let ld_command = `ld {obj_output} -o {exec_output}`;
+let run_command = `{exec_output}{extra_args}`;
+
+if os() == "windows" and use_bash {
+    nasm_command = `bash -c '{nasm_command}'`;
+    ld_command = `bash -c '{ld_command}'`;
+    run_command = `bash -c '{run_command}; echo $?'`;
+}
+
+print `[NASM] {nasm_command}\n`;
+let nasm_output = cmd(nasm_command);
+print nasm_output;
+
+print `[LD] {ld_command}\n`;
+let ld_output = cmd(ld_command);
+print ld_output;
+
+if run {
+    print cmd(run_command);
+}

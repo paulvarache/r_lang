@@ -19,7 +19,6 @@ proc fputs write              end
 proc puts  FD_stdout write    end
 proc eputs FD_stderr write    end
 
-proc exit SYS_exit syscall1   end
 
 // Get the length of a C string
 proc strlen
@@ -55,3 +54,6 @@ proc putc
     putc_buf !8
     1 putc_buf puts
 end
+
+
+proc exit SYS_exit syscall1   end
