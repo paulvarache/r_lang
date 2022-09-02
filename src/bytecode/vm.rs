@@ -144,6 +144,20 @@ fn native_std_env_get_arg(args: Vec<Value>) -> Value {
         _ => panic!("index must be a number"),
     }
 }
+fn native_std_string_charcode(args: Vec<Value>) -> Value {
+    let mut vals = args.iter();
+    let value = vals.next().expect("expected string charcode string");
+    match value {
+        Value::String(s) => {
+            if s.len() != 1 {
+                panic!("string must be a single character");
+            } else {
+                Value::Number(s.bytes().next().unwrap() as f64)
+            }
+        }
+        _ => panic!("string must be a string"),
+    }
+}
 
 fn native_std_env_cwd(_args: Vec<Value>) -> Value {
     Value::String(
@@ -190,6 +204,7 @@ impl VM {
         s.define_native("std::fs::read_file", native_std_fs_read_file);
         s.define_native("std::fs::write_file", native_std_fs_write_file);
         s.define_native("std::process::cmd", native_std_process_cmd);
+        s.define_native("std::string::charcode", native_std_string_charcode);
         s.define_native(
             "std::convert::parse_number",
             native_std_convert_parse_number,

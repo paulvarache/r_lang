@@ -20,6 +20,9 @@
 			"include": "#mem-declaration"
 		},
 		{
+			"include": "#with-declaration"
+		},
+		{
 			"include": "#strings"
 		},
 		{
@@ -46,10 +49,31 @@
 				}
 			}
 		},
+		"with-declaration": {
+			"name": "meta.with.orth",
+			"comment": "",
+			"begin": "\\b(with|peek)",
+			"end": "\\b(do)",
+			"beginCaptures": {
+				"1": {
+					"name": "keyword.const.orth"
+				}
+			},
+			"endCaptures": {
+				"1": {
+					"name": "keyword.with.orth"
+				}
+			},
+			"captures": [
+				{
+					"include": "#variables"
+				}
+			]
+		},
 		"proc-declaration": {
 			"name": "meta.const.orth",
 			"comment": "",
-			"match": "\\b(proc)\\s+([a-zA-Z0-9\\(\\)@!]+)",
+			"match": "\\b(proc)\\s+([a-zA-Z0-9\\(\\)@!\\-]+)",
 			"captures": {
 				"1": {
 					"name": "keyword.proc.orth"

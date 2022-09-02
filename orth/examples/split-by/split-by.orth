@@ -1,0 +1,8 @@
+include "./orth/std.orth"
+
+"Hello, World!" ',' split-by
+
+puts
+10 putc
+puts
+10 putc

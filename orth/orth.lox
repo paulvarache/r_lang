@@ -9,6 +9,8 @@ use std::env::get_arg;
 use std::env::cwd;
 use std::env::os;
 
+use std::string::charcode;
+
 fun is_digit(c) {
     return str_contains("0123456789", c);
 }
@@ -33,10 +35,29 @@ fun is_alphanum(c) {
     return is_alpha(c) or is_digit(c);
 }
 
+fun strlen_without_escape(s) {
+    let strlen = 0;
+    let i = 0;
+    let is_escape = false;
+
+    while i < s.length {
+        if is_escape {
+            is_escape = false;
+        } else {
+            strlen = strlen + 1;
+            is_escape = s[i] == "\\";
+        }
+        i = i + 1;
+    }
+    return strlen;
+}
+
 enum OpCode {
     PushInt,
     PushString,
+    PushChar,
     PushMem,
+    PushWith,
     Argv,
     Argc,
     Add,
@@ -78,12 +99,36 @@ class Procs { }
 class Memory { }
 class Included { }
 
+class WithNames {}
+
+class WithScope {
+    init() {
+        this.parent = nil;
+        this.count = 0;
+        this.names = WithNames();
+    }
+    add_name(name) {
+        this.names[name] = this.count;
+        this.count = this.count + 1;
+    }
+    get_name_offset(name) {
+        if this.names[name] != nil {
+            return this.names[name];
+        } else if this.parent != nil {
+            return this.count + this.parent.get_name_offset(name);
+        } else {
+            return nil;
+        }
+    }
+}
+
 enum BlockType {
     Root,
     If,
     Else,
     While,
     Proc,
+    With,
 }
 
 class StackNode {
@@ -171,6 +216,23 @@ class Lexer {
         this.procs = Procs();
         this.first_non_include_passed = false;
         this.included = Included();
+        this.with_scope = nil;
+    }
+    is_name_taken(name) {
+        return this.consts[name] != nil
+            or this.procs[name] != nil
+            or (this.with_scope != nil and this.with_scope.get_name_offset(name) != nil);
+    }
+    open_with_scope(scope) {
+        scope.parent = this.with_scope;
+        this.with_scope = scope;
+    }
+    close_with_scope() {
+        let closed = this.with_scope;
+        let parent = closed.parent;
+        closed.parent = nil;
+        this.with_scope = parent;
+        return closed;
     }
     matches(s) {
         let c = "";
@@ -340,6 +402,9 @@ class Lexer {
         } else if current == "\"" {
             this.ptr = this.ptr + 1;
             this.string();
+        } else if current == "'" {
+            this.ptr = this.ptr + 1;
+            this.char();
         } else if is_digit(current) {
             this.number();
         } else {
@@ -379,7 +444,7 @@ class Lexer {
             } else if word == "@16" {
                 this.emit(Op(OpCode.Load16, 0));
             } else if word == "!16" {
-                this.emit(Op(OpCode.Store8, 0));
+                this.emit(Op(OpCode.Store16, 0));
             } else if word == "@32" {
                 this.emit(Op(OpCode.Load32, 0));
             } else if word == "!32" {
@@ -410,6 +475,10 @@ class Lexer {
                 this.emit(Op(OpCode.Drop, 0));
             } else if word == "rotate" {
                 this.emit(Op(OpCode.Rotate, 0));
+            } else if word == "with" {
+                this.with_statement(false);
+            } else if word == "peek" {
+                this.with_statement(true);
             } else if word == "if" {
                 this.if_statement();
             } else if word == "end" {
@@ -428,6 +497,13 @@ class Lexer {
                 } else if this.procs[word] {
                     this.call_proc(word);
                 } else {
+                    if this.with_scope != nil {
+                        let offset = this.with_scope.get_name_offset(word);
+                        if offset != nil {
+                            this.emit(Op(OpCode.PushWith, offset));
+                            return;
+                        }
+                    }
                     assert false, `line {this.line + 1}: unknown keyword '{word}'`;
                 }
             }
@@ -458,6 +534,39 @@ class Lexer {
         this.write_line(`    cmp rax, 1`);
         this.write_line(`    jne while_end_{this.blocks.id}`);
     }
+    with_statement(peek) {
+        let found = false;
+        let idx = 0;
+        let scope = WithScope();
+        while !found and this.ptr < this.source.length {
+            let next = this.next_word();
+            if next == "do" {
+                found = true;
+            } else {
+                assert !this.is_name_taken(next), `'{next}' is already defined`;
+                scope.add_name(next);
+            }
+            idx = idx + 1;
+        }
+        let count = scope.count;
+        let block = this.open_block(BlockType.With);
+        this.write_line(`;; -- with -- `);
+        this.write_line(`    mov rax, [ret_stack_rsp]`);
+        this.write_line(`    sub rax, {count * 8}`);
+        this.write_line(`    mov [ret_stack_rsp], rax`);
+        count = count - 1;
+        while count >= 0 {
+            if peek {
+                this.write_line(`    mov rbx, [rsp+{count * 8}]`);
+                this.write_line(`    mov [rax+{(scope.count - 1 - count) * 8}], rbx`);
+            } else {
+                this.write_line(`    pop rbx`);
+                this.write_line(`    mov [rax+{count * 8}], rbx`);
+            }
+            count = count - 1;
+        }
+        this.open_with_scope(scope);
+    }
     if_statement() {
         let else_block = this.open_block(BlockType.If);
         this.write_line(`;; -- if -- `);
@@ -481,7 +590,7 @@ class Lexer {
             this.write_line(`addr_{block.id}:`);
         } else if block.type == BlockType.If {
             this.write_line(`;; -- end -- `);
-            this.write_line(`addr_end_{block.id}:`);
+            this.write_line(`addr_{block.id}:`);
         } else if block.type == BlockType.While {
             this.write_line(`    jmp while_start_{block.id}`);
             this.write_line(`;; -- end -- `);
@@ -492,6 +601,12 @@ class Lexer {
             this.write_line(`    mov rsp, [ret_stack_rsp]`);
             this.write_line(`    ret`);
             this.write_line(`proc_end_{block.id}:`);
+        } else if block.type == BlockType.With {
+            let scope = this.close_with_scope();
+            this.write_line(`;; -- with end -- `);
+            this.write_line(`    mov rax, [ret_stack_rsp]`);
+            this.write_line(`    add rax, {scope.count * 8}`);
+            this.write_line(`    mov [ret_stack_rsp], rax`);
         }
     }
     read_number() {
@@ -507,6 +622,7 @@ class Lexer {
     }
     read_string() {
         let str = "";
+        let is_escaped = false;
         while this.ptr < this.source.length and this.source[this.ptr] != "\"" {
             str = str + this.source[this.ptr];
             this.ptr = this.ptr + 1;
@@ -514,9 +630,34 @@ class Lexer {
         this.ptr = this.ptr + 1;
         return str;
     }
+    read_char() {
+        assert this.ptr < this.source.length, "Unterminated char";
+        let char = charcode(this.source[this.ptr]);
+        this.ptr = this.ptr + 1;
+        if char == charcode("\\") {
+            assert this.ptr < this.source.length, "Unterminated char";
+            let next = this.source[this.ptr];
+            if next == "n" {
+            print 10;
+                char = 10;
+            } else if next == "'" {
+                char = 39;
+            } else if next == "\\" {
+                char = 92;
+            }
+            this.ptr = this.ptr + 1;
+        }
+        assert this.source[this.ptr] == "'", "Unterminated char";
+        this.ptr = this.ptr + 1;
+        return char;
+    }
     string() {
         let str = this.read_string();
         this.emit(Op(OpCode.PushString, str));
+    }
+    char() {
+        let char = this.read_char();
+        this.emit(Op(OpCode.PushInt, char));
     }
     emit(op) {
         if this.processing_const {
@@ -539,11 +680,16 @@ class Lexer {
                 this.write_line("    push rax");
             } else if op.type == OpCode.PushString {
                 let idx = this.add_string(op.operand);
-                this.write_line(`    mov rax, {op.operand.length}`);
+                let strlen = strlen_without_escape(op.operand);
+                this.write_line(`    mov rax, {strlen}`);
                 this.write_line("    push rax");
                 this.write_line(`    push str_{idx}`);
             } else if op.type == OpCode.PushMem {
                 this.write_line(`    push mem + {op.operand}`);
+            } else if op.type == OpCode.PushWith {
+                this.write_line(`    mov rax, [ret_stack_rsp]`);
+                this.write_line(`    add rax, {op.operand * 8}`);
+                this.write_line(`    push QWORD [rax]`);
             } else if op.type == OpCode.Add {
                 this.write_line("    pop rax");
                 this.write_line("    pop rbx");
@@ -689,17 +835,20 @@ class Lexer {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             } else if op.type == OpCode.Syscall2 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
                 this.write_line("    pop rsi");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             } else if op.type == OpCode.Syscall3 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
                 this.write_line("    pop rsi");
                 this.write_line("    pop rdx");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             } else if op.type == OpCode.Syscall4 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
@@ -707,6 +856,7 @@ class Lexer {
                 this.write_line("    pop rdx");
                 this.write_line("    pop r10");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             } else if op.type == OpCode.Syscall5 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
@@ -715,6 +865,7 @@ class Lexer {
                 this.write_line("    pop r10");
                 this.write_line("    pop r8");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             } else if op.type == OpCode.Syscall6 {
                 this.write_line("    pop rax");
                 this.write_line("    pop rdi");
@@ -724,6 +875,7 @@ class Lexer {
                 this.write_line("    pop r8");
                 this.write_line("    pop r9");
                 this.write_line("    syscall");
+                this.write_line("    push rax");
             }
         }
     }
@@ -742,13 +894,14 @@ class Lexer {
     }
     add_string(s) {
         let idx = this.str_count;
-        this.data = `{this.data}\n    str_{this.str_count}: db "{s}"`;
+        this.data = `{this.data}\n    str_{this.str_count}: db \`{s}\``;
         this.str_count = this.str_count + 1;
         return idx;
     }
     write(dst) {
 
         let contents = `
+BITS 64
 section .text
     global _start
 _start:
@@ -769,6 +922,7 @@ ret_stack: resb 4096
 ret_stack_end:
 mem: resb {this.mem_capacity}
 `;
+
         write_file(dst, contents);
     }
 }

@@ -1,0 +1,8 @@
+mem servaddr 16 end
+
+256 servaddr 2 + !16
+servaddr 2 + @16
+10 divmod
+
+60
+syscall1

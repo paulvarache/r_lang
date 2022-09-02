@@ -1,0 +1,42 @@
+include "./orth/std.orth"
+
+proc in-proc
+10 20 30
+    with a b c do
+        a putd
+        10 putc
+        b putd
+        10 putc
+        c putd
+        10 putc
+    end
+end
+
+in-proc
+
+10 20 30
+
+with a b c do
+    40 50 60
+    peek d e f do
+        a putd
+        10 putc
+        d putd
+        10 putc
+        b putd
+        10 putc
+        e putd
+        10 putc
+        c putd
+        10 putc
+        f putd
+        10 putc
+    end
+
+    putd
+    10 putc
+    putd
+    10 putc
+    putd
+    10 putc
+end

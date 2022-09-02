@@ -1,0 +1,78 @@
+include "./orth/std.orth"
+
+mem sock_fd sizeof(u64) end
+mem cli_sock_fd sizeof(u64) end
+mem servaddr sizeof(sockaddr) end
+mem cliaddr sizeof(sockaddr) end
+mem clilen sizeof(u32) end
+
+const CLI_BUF_SIZE 1024 end
+
+mem cli_buf CLI_BUF_SIZE end
+
+const PORT 6969 end
+
+// code strlen *str
+proc checkerror
+    rotate dup 0 < if
+        rotate rotate puts
+        255 swap - exit
+    end
+    swap drop
+    swap drop
+end
+
+0 SOCK_STREAM AF_INET socket
+
+"ERROR: could not create socket\n" checkerror
+
+sock_fd !64
+
+"Successfully created socket " puts sock_fd @64 putd "\n" puts
+
+AF_INET         servaddr sockaddr_in.sin_family + !16
+INADDR_ANY      servaddr sockaddr_in.sin_addr + !32
+PORT htons      servaddr sockaddr_in.sin_port + !16
+
+sizeof(sockaddr) servaddr sock_fd @64 bind
+
+"ERROR: could not bind socket\n" checkerror drop
+
+"Successfully bound socket " puts
+sock_fd @64                  putd
+" to port "                  puts
+PORT                         putd
+10                           putc
+
+5 sock_fd @64 listen
+
+"ERROR: could not listen to socket\n" checkerror drop
+
+"Successfully listening on socket " puts
+sock_fd @64                         putd
+10                                  putc
+
+clilen cliaddr sock_fd @64 accept
+
+"ERROR: could not accept connection\n" checkerror
+
+cli_sock_fd !64
+
+"Accepted client "                     puts
+cliaddr sockaddr_in.sin_addr + @32     putd
+"\n"                                   puts
+
+CLI_BUF_SIZE cli_buf cli_sock_fd @64 read
+
+CLI_BUF_SIZE cli_buf puts
+
+"HTTP/1.1 200 OK\r\n"         cli_sock_fd @64 write
+"Server: Orth\r\n"            cli_sock_fd @64 write
+"Content-Type: text/html\r\n" cli_sock_fd @64 write
+"Connection: Closed\r\n"      cli_sock_fd @64 write
+"\r\n"                        cli_sock_fd @64 write
+"<h1>Hello there</h1>\n"      cli_sock_fd @64 write
+
+cli_sock_fd @64 close drop
+
+sock_fd @64 close drop

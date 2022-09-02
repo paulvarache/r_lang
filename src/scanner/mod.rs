@@ -188,12 +188,17 @@ impl<'a> Scanner<'a> {
         self.template_literal_depth != 0
     }
     fn last_match(&self, expect: u8) -> bool {
-        if let Some(last) = self.last {
-            if last == expect {
-                return true;
+        if self.cursor > 0 {
+            self.buffer[self.cursor - 1] == expect
+        } else {
+            // TODO: make this read from the src
+            if let Some(last) = self.last {
+                if last == expect {
+                    return true;
+                }
             }
+            return false;
         }
-        return false;
     }
     fn parse_token(&mut self, c: u8) -> Result<Option<Token>, LoxError> {
         if self.is_within_template_literal()

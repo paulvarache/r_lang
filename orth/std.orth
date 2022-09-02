@@ -11,13 +11,56 @@ const sizeof(addr) sizeof(u64) end
 // Linux syscall constant
 const FD_stdout 1 end
 const FD_stderr 2 end
-const SYS_write 1 end
-const SYS_exit 60 end
 
-proc write SYS_write syscall3 end
-proc fputs write              end
-proc puts  FD_stdout write    end
-proc eputs FD_stderr write    end
+const SYS_read 0   end
+const SYS_write 1   end
+const SYS_close 3   end
+const SYS_socket 41 end
+const SYS_connect 42 end
+const SYS_accept 43   end
+const SYS_bind 49   end
+const SYS_listen 50   end
+const SYS_exit 60   end
+
+proc read SYS_read syscall3     end
+proc write SYS_write syscall3   end
+proc fputs write                end
+proc puts  FD_stdout write drop end
+proc eputs FD_stderr write drop end
+
+proc close SYS_close syscall1 end
+
+// network
+const AF_INET 2 end
+
+const SOCK_STREAM 1 end
+
+const INADDR_ANY 0 end
+const INADDR_LOOPBACK 16777343 end
+
+const sizeof(sockaddr) 16 end
+
+const sockaddr_in.sin_family 0 end
+const sockaddr_in.sin_port 2 end
+const sockaddr_in.sin_addr 4 end
+
+const sizeof(sockaddr_in.sin_family) 2 end
+const sizeof(sockaddr_in.sin_port) 2 end
+const sizeof(sockaddr_in.sin_addr) 4 end
+
+proc socket SYS_socket syscall3 end
+proc bind SYS_bind syscall3 end
+proc listen SYS_listen syscall2 end
+proc accept SYS_accept syscall3 end
+
+proc htons
+    // x ((x & 255) << 8)
+    dup 255 band 8 shl
+    // ((x & 255) << 8) ((x >> 8) & 255)
+    swap 8 shr 255 band
+    bor
+end
+
 
 // Get the length of a C string
 proc strlen
@@ -31,20 +74,26 @@ const PUT_BUF_SIZE 20 end
 mem putd_buf PUT_BUF_SIZE end
 
 proc putd
-    // n i
-    PUT_BUF_SIZE 1 - while over 0 != do
-        // i n/10 n%10+48
-        swap 10 divmod 48 +
-        // n/10 i
-        rotate dup putd_buf + rotate swap
-        // putd_buf[i] = n%10+48
-        !8
-        1 -
+    // i
+    dup 0 = if
+        "0" puts
+    else
+        // n i
+        PUT_BUF_SIZE 1 - while over 0 != do
+            // i n/10 n%10+48
+            swap 10 divmod 48 +
+            // n/10 i
+            rotate dup putd_buf + rotate swap
+            // putd_buf[i] = n%10+48
+            !8
+            1 -
+        end
+        // length
+        PUT_BUF_SIZE over - 1 -
+        // 2 putd_buf + 17
+        swap putd_buf + 1 + puts
+        drop
     end
-    // length
-    PUT_BUF_SIZE over -
-    // 2 putd_buf + 17
-    swap putd_buf + puts
 end
 
 mem putc_buf 1 end
@@ -56,3 +105,23 @@ end
 
 
 proc exit SYS_exit syscall1   end
+
+
+// strlen *str char
+proc split-by
+    with len str char do
+        0 while
+            peek i do
+                i len <
+                i str + @8 char !=
+                band
+            end
+        do
+            1 +
+        end
+        with i do
+            len i 1 + - str i 1 + +
+            i str
+        end
+    end
+end

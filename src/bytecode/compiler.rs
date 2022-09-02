@@ -1299,6 +1299,9 @@ impl<'a> Compiler<'a> {
                         Some(b'"') => {
                             res.push(b'"');
                         }
+                        Some(b'`') => {
+                            res.push(b'`');
+                        }
                         Some(n) => {
                             res.push(c);
                             res.push(n);
